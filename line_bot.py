@@ -108,6 +108,31 @@ def view_report_csv():
     return Response("尚未產生報表。", mimetype="text/plain; charset=utf-8")
 
 
+# ---- 派車單檢視路由（每台車一份，給司機/內勤） ----
+def _today_dispatch(which):
+    """which: 'html' | 'csv' → 回傳今天派車單檔路徑或 None。"""
+    import logistics_agent as L
+    day_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    name = "dispatch.html" if which == "html" else "dispatch.csv"
+    p = os.path.join(day_dir, name)
+    return p if os.path.exists(p) else None
+
+@app.route("/dispatch", methods=["GET"])
+def view_dispatch():
+    p = _today_dispatch("html")
+    if p:
+        return send_file(p)
+    return Response("尚未產生派車單。請在 LINE 傳『每日配送.xlsx』或『跑』觸發規劃。",
+                    mimetype="text/plain; charset=utf-8")
+
+@app.route("/dispatch.csv", methods=["GET"])
+def view_dispatch_csv():
+    p = _today_dispatch("csv")
+    if p:
+        return send_file(p, mimetype="text/csv")
+    return Response("尚未產生派車單。", mimetype="text/plain; charset=utf-8")
+
+
 # ---- 指令處理 ----
 def handle_text(text: str) -> str:
     """回傳要推回 LINE 的文字訊息。"""
