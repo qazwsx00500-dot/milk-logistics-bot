@@ -572,6 +572,8 @@ def main():
     ap.add_argument("--start", type=float, default=DEFAULT_START_HOUR, help="出發時間(24h, 預設9.5=09:30)")
     ap.add_argument("--auto", action="store_true", help="強制自動分車：忽略 Excel 車號欄，依 17:30 回倉自動分成多台車（最多3台）")
     ap.add_argument("--vehicles", type=int, default=None, help="搭配 --auto：強制分剛好 N 台車（忽略 17:30 時間窗，只求最短路線）")
+    ap.add_argument("--excel", action="store_true",
+                   help="額外產出整合 Excel（整合報表.xlsx，含路線圖分頁）。預設不產，需時再加此開關")
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -674,12 +676,19 @@ def main():
         import shutil as _sh
         _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
     dhtml, dcsv = report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": args.start})
-    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
-                                     meta={"start_hour": args.start}, map_png=(os.path.join(dispatch_dir, "route_map.png") if map_png else None))
+    # 整合 Excel 預設不產（使用者決定：需時加 --excel）；LINE/雲端也不自動產
+    xlsx = None
+    if args.excel:
+        xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
+                                         meta={"start_hour": args.start},
+                                         map_png=(os.path.join(dispatch_dir, "route_map.png") if map_png else None))
     print(f"🚚 派車單資料夾  ：{dispatch_dir}")
     print(f"🚚 派車單(HTML)  ：{dhtml}")
     print(f"🚚 派車單(CSV)   ：{dcsv}")
-    print(f"📊 整合Excel     ：{xlsx}")
+    if xlsx:
+        print(f"📊 整合Excel     ：{xlsx}")
+    else:
+        print(f"📊 整合Excel     ：（未產出，需加 --excel 才產）")
 
 
 def build_map(result, here, use_google):

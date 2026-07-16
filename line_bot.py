@@ -302,9 +302,8 @@ def run_plan(data_path=None, rows=None):
         dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
         os.makedirs(dispatch_dir, exist_ok=True)
         report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": start_hour})
-        xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
-                                         meta={"start_hour": start_hour},
-                                         map_png=(os.path.join(dispatch_dir, "route_map.png") if map_png else None))
+        # 整合 Excel 雲端不自動產（缺路線圖分頁），改由本機 --excel 直跑產出
+        xlsx = None
 
         # 文字摘要
         veh_note = ""
@@ -495,9 +494,8 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
         import shutil as _sh
         _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
     report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": L.DEFAULT_START_HOUR})
-    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
-                                     meta={"start_hour": L.DEFAULT_START_HOUR},
-                                     map_png=(os.path.join(dispatch_dir, "route_map.png") if map_png else None))
+    # 整合 Excel 雲端不自動產（缺路線圖分頁），改由本機 --excel 直跑產出
+    xlsx = None
 
     lines = [f"📦 路線規劃完成（{result.distance_source}）",
              f"🚚 {mode_note}",
