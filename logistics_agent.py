@@ -52,6 +52,18 @@ def _default_report_dir():
 
 REPORT_DIR = _default_report_dir()
 
+def _default_dispatch_dir():
+    # 派車單 / 司機派遣清單：每台車一份，給司機/內勤拿著跑，與路線規劃總報表(當日車輛報表)分開。
+    onedrive_desk = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
+    if os.path.isdir(onedrive_desk):
+        base = os.path.join(onedrive_desk, "當日派車單")
+    else:
+        base = os.path.join(os.path.expanduser("~"), "Desktop", "當日派車單")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+DISPATCH_DIR = _default_dispatch_dir()
+
 
 def make_sample(path):
     try:
@@ -624,6 +636,14 @@ def main():
     print(f"📄 路線報表(HTML)：{html}")
     print(f"📄 路線報表(CSV) ：{csvp}")
     print(f"🌐 互動地圖      ：{gmap}")
+
+    # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
+    dispatch_dir = os.path.join(DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    os.makedirs(dispatch_dir, exist_ok=True)
+    dhtml, dcsv = report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": args.start})
+    print(f"🚚 派車單資料夾  ：{dispatch_dir}")
+    print(f"🚚 派車單(HTML)  ：{dhtml}")
+    print(f"🚚 派車單(CSV)   ：{dcsv}")
 
 
 def build_map(result, here, use_google):

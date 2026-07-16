@@ -276,3 +276,95 @@ def build_csv_grouped(result, out_path):
                         "回倉", ret, status,
                         f"油資_{rt.get('fuel_cost',0):.0f}元" if result.fuel_cost_per_km > 0 else ""])
     return out_path
+
+
+# ---------- 派車單（每台車一份，給司機/內勤） ----------
+
+def build_dispatch_grouped(result, day_dir, meta=None):
+    """產『當日派車單』：每台車一份派遣清單（HTML + 合併 CSV），放到 day_dir。
+    與路線規劃總報表(當日車輛報表)分開，專給司機拿著跑。"""
+    meta = meta or {}
+    start = meta.get("start_hour", 8.0)
+    gen = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # CSV：所有車攤平
+    csvp = os.path.join(day_dir, "dispatch.csv")
+    with open(csvp, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["車號", "順序", "店家", "地址", "瓶數", "下貨秒數", "預計到店", "預計離店"])
+        for rt in result.routes:
+            v = rt["vehicle"]
+            for si, s in enumerate(rt["stops"]):
+                a, lv = rt["etas"][si]
+                qty = int(s.demand) if s.demand == int(s.demand) else s.demand
+                svc = int(round(s.service_time))
+                w.writerow([v.id, si + 1, s.name, s.address, qty, svc, _hhmm(a), _hhmm(lv)])
+        w.writerow([])
+        w.writerow(["=== 派車單總計 ==="])
+        w.writerow(["出車數", len(result.routes)])
+        w.writerow(["總瓶數", f"{result.total_load:.0f}"])
+        for rt in result.routes:
+            ret = _hhmm(rt["end_hour"])
+            status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
+            w.writerow([rt["vehicle"].id, "里程_km", f"{rt['distance_km']:.1f}", "回倉", ret, status])
+
+    # HTML：每台車一張卡片，司機視角
+    cards = ""
+    for rt in result.routes:
+        v = rt["vehicle"]
+        ret = _hhmm(rt["end_hour"])
+        on_time = rt.get("on_time", True)
+        tag = '<span class="ok">✅ 準時回倉</span>' if on_time else f'<span class="warn">⚠ 超過17:30（{ret}）</span>'
+        rows_html = ""
+        for si, s in enumerate(rt["stops"]):
+            a, lv = rt["etas"][si]
+            qty = int(s.demand) if s.demand == int(s.demand) else s.demand
+            rows_html += (
+                f"<tr><td class='seq'>{si+1}</td><td><b>{s.name}</b><br><span class='addr'>{s.address}</span></td>"
+                f"<td class='num'>{qty}</td>"
+                f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td></tr>"
+            )
+        cards += f"""
+        <div class="card">
+          <div class="card-h">🚚 {v.id} 派車單</div>
+          <div class="card-meta">起點 {v.start_addr or '—'} ｜ {len(rt['stops'])} 站 ｜
+            總瓶數 {rt['load']:.0f} ｜ 里程 {rt['distance_km']:.1f} km ｜ 回倉 {ret}（目標17:30）{tag}</div>
+          <table>
+            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>到店</th><th>離店</th></tr></thead>
+            <tbody>{rows_html}</tbody>
+          </table>
+        </div>"""
+
+    html = f"""<!DOCTYPE html>
+<html lang="zh-TW"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鮮奶配送派車單</title>
+<style>
+ body{{font-family:-apple-system,"Microsoft JhengHei",sans-serif;margin:0;background:#f4f5f7;color:#222;}}
+ .wrap{{max-width:960px;margin:0 auto;padding:18px;}}
+ header{{background:#c0392b;color:#fff;padding:16px 18px;border-radius:10px;}}
+ header h1{{margin:0;font-size:20px;}}
+ header .sub{{opacity:.9;font-size:13px;margin-top:4px;}}
+ .card{{background:#fff;border-radius:10px;padding:12px 14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08);}}
+ .card-h{{font-weight:700;font-size:16px;margin-bottom:4px;}}
+ .card-meta{{font-size:12px;color:#555;margin-bottom:8px;}}
+ table{{width:100%;border-collapse:collapse;font-size:13px;}}
+ th,td{{text-align:left;padding:6px 6px;border-bottom:1px solid #eee;}}
+ th{{color:#666;font-weight:600;}}
+ td.num,th.num{{text-align:right;font-variant-numeric:tabular-nums;}}
+ td.seq{{font-weight:700;color:#c0392b;font-size:15px;width:28px;}}
+ .addr{{color:#888;font-size:11px;}}
+ .ok{{color:#0b6b3a;font-weight:700;}}
+ .warn{{color:#c0392b;font-weight:700;}}
+ footer{{text-align:center;color:#999;font-size:12px;margin:16px 0;}}
+</style></head>
+<body><div class="wrap">
+<header><h1>🚚 鮮奶配送派車單</h1>
+<div class="sub">出發 {_hhmm(start)} ｜ 生成 {gen} ｜ 下貨每瓶 10 秒</div></header>
+{cards}
+<footer>本派車單由物流路線規劃 Agent 產出 · 每台車一份，司機拿著跑</footer>
+</div></body></html>"""
+    htmlp = os.path.join(day_dir, "dispatch.html")
+    with open(htmlp, "w", encoding="utf-8") as f:
+        f.write(html)
+    return htmlp, csvp

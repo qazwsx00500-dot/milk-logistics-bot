@@ -226,6 +226,11 @@ def run_plan(data_path=None, rows=None):
         report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
         L.build_map(result, day_dir, use_google)
 
+        # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
+        dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+        os.makedirs(dispatch_dir, exist_ok=True)
+        report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": start_hour})
+
         # 文字摘要
         veh_note = ""
         if rows is not None and all(r[0] == "" for r in rows):
@@ -402,6 +407,11 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
                                   meta={"start_hour": L.DEFAULT_START_HOUR})
     report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
     L.build_map(result, day_dir, True)
+
+    # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
+    dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    os.makedirs(dispatch_dir, exist_ok=True)
+    report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": L.DEFAULT_START_HOUR})
 
     lines = [f"📦 路線規劃完成（{result.distance_source}）",
              f"🚚 {mode_note}",
