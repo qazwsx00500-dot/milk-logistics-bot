@@ -206,21 +206,28 @@ def run_plan(data_path=None, rows=None):
         if result is None:
             return "⚠ 排程失敗：沒有可規劃的車輛/店家。請檢查 Excel 欄位。"
 
-        # 無車號超時 → 自動按區域拆車重跑
-        if rows is not None and all(r[0] == "" for r in rows) and len(result.routes) == 1:
-            rt0 = result.routes[0]
-            if not rt0.get("on_time"):  # 1台車超過17:30
-                split = en.split_by_region(rows)
-                # 重寫臨時檔(帶區域車號) 再跑
-                import openpyxl as _ox
-                from openpyxl import Workbook as _WB
-                tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
-                wb = _WB(); ws = wb.active; ws.title = "每日配送"
-                ws.append(["車號", "店家名稱", "店家地址", "瓶數"])
-                for veh, n, a, q in split:
-                    ws.append([veh, n, a, q])
-                wb.save(tmp)
-                result, skipped = L.plan(start_hour, tmp, use_google, no_google, fuel_cost_per_km=fuel_cost)
+        # 無車號 → 依「時間窗 + 最短距離」自動分車 (最多3台, 一台跑不完才加車)
+        if rows is not None and all(r[0] == "" for r in rows):
+            if len(result.routes) == 1 and not result.routes[0].get("on_time"):
+                import auto_router
+                stops = result.routes[0]["stops"]
+                depot = L.DEPOT
+                groups = auto_router.decide_groups(
+                    stops, depot, start_hour, L.TARGET_RETURN_HOUR, max_vehicles=3)
+                if len(groups) > 1:
+                    # 按群重寫臨時 xlsx (車01/車02/車03)
+                    import openpyxl as _ox
+                    from openpyxl import Workbook as _WB
+                    tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
+                    wb = _WB(); ws = wb.active; ws.title = "每日配送"
+                    ws.append(["車號", "店家名稱", "店家地址", "瓶數"])
+                    for gi, g in enumerate(groups, 1):
+                        veh = f"車{gi:02d}"
+                        for si in g:
+                            s = stops[si]
+                            ws.append([veh, s.name, s.address, int(s.demand or 0)])
+                    wb.save(tmp)
+                    result, skipped = L.plan(start_hour, tmp, use_google, no_google, fuel_cost_per_km=fuel_cost)
 
         # 產報表到 日期子資料夾
         day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
@@ -233,7 +240,7 @@ def run_plan(data_path=None, rows=None):
         # 文字摘要
         veh_note = ""
         if rows is not None and all(r[0] == "" for r in rows):
-            veh_note = f"\n🚚 由 Agent 依『17:30回倉』自動安排 {len(result.routes)} 台車"
+            veh_note = f"\n🚚 由 Agent 依『09:30出車/17:30回倉』自動安排 {len(result.routes)} 台車（最多3台，一台跑不完才加車）"
         lines = [f"📦 路線規劃完成（{result.distance_source}）",
                  f"出發 09:30 ｜ 目標回倉 17:30{veh_note}",
                  f"車數 {len(result.routes)} 台 ｜ 總實際里程 {result.total_distance_km:.0f} km ｜ 總瓶數 {int(result.total_load)}"]
@@ -258,6 +265,7 @@ def run_plan(data_path=None, rows=None):
         if PUBLIC_URL:
             lines.append(f"\n📄 報表：{PUBLIC_URL}/report")
             lines.append(f"📊 CSV ：{PUBLIC_URL}/report.csv")
+            lines.append(f"🗺️ 地圖：{PUBLIC_URL}/route_map")
         else:
             lines.append(f"\n📁 報表已產出：{day_dir}")
 
@@ -401,6 +409,17 @@ def callback():
                                        {"event": event, "file_msg": event.message}), daemon=True)
             t.start()
     return "OK"
+
+
+@app.route("/route_map", methods=["GET"])
+def view_route_map():
+    """當日路線地圖 (route_map.html)。"""
+    import logistics_agent as L
+    day = datetime.now().strftime("%Y-%m-%d")
+    p = os.path.join(L.REPORT_DIR, day, "route_map.html")
+    if os.path.exists(p):
+        return send_file(p)
+    return Response("尚無路線地圖。請先傳 Excel 觸發規劃。", mimetype="text/plain; charset=utf-8")
 
 
 @app.route("/last_result", methods=["GET"])
