@@ -22,9 +22,9 @@ except ImportError:
 
 # 欄位別名對應（小寫去空白後比對）
 _VEH = ["車號", "車輛", "路線編號", "路線", "route", "vehicle", "車", "車牌"]
-_NAME = ["店家名稱", "名稱", "店名", "客戶名稱", "店家", "name", "店"]
-_ADDR = ["店家地址", "地址", "客戶地址", "address", "addr", "位置"]
-_QTY = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count", "件數", "瓶"]
+_NAME = ["店家名稱", "名稱", "店名", "客戶名稱", "客戶簡稱", "客戶", "簡稱", "店家", "name", "店", "對象"]
+_ADDR = ["店家地址", "送貨地址", "地址", "客戶地址", "送貨", "address", "addr", "位置"]
+_QTY = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count", "件數", "瓶", "量"]
 
 # 台灣縣市關鍵字（用於無車號時的地理分車）
 _REGION_KEYWORDS = [
@@ -41,9 +41,17 @@ def _norm(h):
 
 
 def _match_col(headers_norm, aliases):
+    """在表頭們(headers_norm: {norm表頭: 原表頭}) 中, 找包含任一別名的欄位。
+    別名可能是表頭的子串(如 別名'地址' 命中表頭'送貨地址')。"""
+    # 先嘗試「完全相等」(最快)
     for a in aliases:
         if _norm(a) in headers_norm:
             return headers_norm[_norm(a)]
+    # 再嘗試「別名是表頭的子串」(寬鬆)
+    for h_norm, h_orig in headers_norm.items():
+        for a in aliases:
+            if _norm(a) and _norm(a) in h_norm:
+                return h_orig
     return None
 
 
@@ -68,16 +76,40 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
       skipped: [(原始店名或標記, 原因), ...]
       out_path: 存的檔路徑 (每日配送_YYYYMMDD.xlsx) 或 None(若沒裝 openpyxl)
     """
-    if openpyxl is None:
-        raise RuntimeError("請先安裝 openpyxl: uv pip install openpyxl")
-
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb.active
-    raw = list(ws.iter_rows(values_only=True))
+    ext = os.path.splitext(path)[1].lower()
+    if ext == ".xls":
+        # 舊版 Excel 97-2003 → 用 xlrd 讀
+        try:
+            import xlrd
+        except ImportError:
+            raise RuntimeError("讀 .xls 需要 xlrd: uv pip install xlrd==2.0.1")
+        book = xlrd.open_workbook(path)
+        sh = book.sheet_by_index(0)
+        raw = []
+        for row_idx in range(sh.nrows):
+            raw.append([sh.cell_value(row_idx, c) for c in range(sh.ncols)])
+    else:
+        # .xlsx / .xlsm → openpyxl
+        if openpyxl is None:
+            raise RuntimeError("請先安裝 openpyxl: uv pip install openpyxl")
+        wb = openpyxl.load_workbook(path, data_only=True)
+        ws = wb.active
+        raw = list(ws.iter_rows(values_only=True))
     if not raw:
         return [], [], None
 
-    headers = [str(h) if h is not None else "" for h in raw[0]]
+    # 自動偵測表頭行：掃前 15 列，找第一列出現已知欄位別名的列
+    header_row_idx = 0
+    for ridx, r in enumerate(raw[:15]):
+        cells = [_norm(str(c)) for c in r if c is not None and str(c).strip() != ""]
+        if not cells:
+            continue
+        # 只要這列含 店家/地址/瓶數 任一別名，就當表頭
+        hit = any(any(_norm(a) in c for c in cells) for a in (_NAME + _ADDR + _QTY))
+        if hit:
+            header_row_idx = ridx
+            break
+    headers = [str(h) if h is not None else "" for h in raw[header_row_idx]]
     hnorm = {_norm(h): h for h in headers}
 
     col_name = _match_col(hnorm, _NAME)
@@ -87,16 +119,22 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
 
     skipped = []
     rows = []
-    for i, r in enumerate(raw[1:], 1):
+    for i, r in enumerate(raw[header_row_idx + 1:], header_row_idx + 2):
         if all(v is None or v == "" for v in r):
             continue  # 空列跳過
-        name = str(r[headers.index(col_name)] if col_name else "") or ""
-        addr = str(r[headers.index(col_addr)] if col_addr else "") or ""
-        qty = _clean_int(r[headers.index(col_qty)] if col_qty else "")
-        veh = str(r[headers.index(col_veh)] if col_veh else "") if col_veh else ""
-        veh = veh.strip()
-        name = name.strip()
-        addr = addr.strip()
+        # 用表頭欄位名去定位索引（找不到該欄就跳過該欄）
+        def _val(col):
+            if not col:
+                return ""
+            try:
+                idx = headers.index(col)
+                return r[idx] if idx < len(r) else ""
+            except (ValueError, IndexError):
+                return ""
+        name = str(_val(col_name)).strip()
+        addr = str(_val(col_addr)).strip()
+        qty = _clean_int(_val(col_qty))
+        veh = str(_val(col_veh)).strip()
         if not name and not addr:
             skipped.append((f"第{i}列", "店家與地址皆空"))
             continue

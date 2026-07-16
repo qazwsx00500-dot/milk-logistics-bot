@@ -273,7 +273,7 @@ def handle_file(event, file_msg) -> str:
     import excel_normalizer as en
     fname = getattr(file_msg, "file_name", "") or ""
     ext = os.path.splitext(fname)[1].lower()
-    if ext not in (".xlsx", ".xlsm", ".csv"):
+    if ext not in (".xlsx", ".xlsm", ".xls", ".csv"):
         return (f"⚠ 我只接受 Excel/CSV 檔（收到的是 {fname or '未知格式'}）。\n"
                 f"請傳包含店家/地址/瓶數的 Excel，我會自動轉成每日配送表。")
 
