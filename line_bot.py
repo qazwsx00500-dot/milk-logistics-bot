@@ -186,8 +186,10 @@ def run_plan(data_path=None, rows=None):
         # 把 rows 寫成臨時標準檔（供 data_loader 讀）
         if rows is not None and data_path is None:
             import excel_normalizer as en
-            # 無車號 → 先填 車01 (auto_assign_vehicles 保守起點)
-            if all(r[0] == "" for r in rows):
+            # 記錄「原始是否無車號」(後面分車判斷要用, 因為下面會先填車01)
+            had_no_vehicle = all(r[0] == "" for r in rows)
+            # 無車號 → 先填 車01 (auto_assign_vehicles 保守起點, 供 solve_grouped 跑第一次)
+            if had_no_vehicle:
                 rows = en.auto_assign_vehicles(rows)
             import openpyxl as _ox
             from openpyxl import Workbook as _WB
@@ -207,13 +209,15 @@ def run_plan(data_path=None, rows=None):
             return "⚠ 排程失敗：沒有可規劃的車輛/店家。請檢查 Excel 欄位。"
 
         # 無車號 → 依「時間窗 + 最短距離」自動分車 (最多3台, 一台跑不完才加車)
-        if rows is not None and all(r[0] == "" for r in rows):
+        if rows is not None and had_no_vehicle:
             if len(result.routes) == 1 and not result.routes[0].get("on_time"):
                 import auto_router
                 stops = result.routes[0]["stops"]
                 depot = L.DEPOT
+                real_end = result.routes[0].get("end_hour") or result.routes[0].get("return_hour")
                 groups = auto_router.decide_groups(
-                    stops, depot, start_hour, L.TARGET_RETURN_HOUR, max_vehicles=3)
+                    stops, depot, start_hour, L.TARGET_RETURN_HOUR, max_vehicles=3,
+                    precomputed_end_hour=real_end)
                 if len(groups) > 1:
                     # 按群重寫臨時 xlsx (車01/車02/車03)
                     import openpyxl as _ox

@@ -78,18 +78,27 @@ def estimate_route_end_hour(stops, depot, start_hour=9.5, est_speed_kmh=30.0):
     return t / 3600.0
 
 
-def decide_groups(stops, depot, start_hour=9.5, target_return=17.5, max_vehicles=3):
+def decide_groups(stops, depot, start_hour=9.5, target_return=17.5, max_vehicles=3,
+                  precomputed_end_hour=None, est_speed_kmh=30.0):
     """依時間窗決定分幾群。回傳 list of list（每群是 stop 索引）。
-    原則：先試 1 台；超時才加車，最多 max_vehicles 台。"""
-    end1 = estimate_route_end_hour(stops, depot, start_hour)
-    if end1 <= target_return or max_vehicles <= 1:
+    原則：先試 1 台；超時才加車，最多 max_vehicles 台。
+
+    precomputed_end_hour: 若提供(來自 solve_grouped 的真實 end_hour)，
+        用它判斷「1 台車是否超時」，避免 haversine 粗估低估導致不分車。
+    """
+    if precomputed_end_hour is not None:
+        one_over = precomputed_end_hour > target_return
+    else:
+        one_over = estimate_route_end_hour(stops, depot, start_hour, est_speed_kmh) > target_return
+
+    if not one_over or max_vehicles <= 1:
         return [list(range(len(stops)))]
     for k in range(2, max_vehicles + 1):
         groups = kmeans_stops(stops, k)
         ok = True
         for g in groups:
             sub = [stops[i] for i in g]
-            if estimate_route_end_hour(sub, depot, start_hour) > target_return:
+            if estimate_route_end_hour(sub, depot, start_hour, est_speed_kmh) > target_return:
                 ok = False
                 break
         if ok:
