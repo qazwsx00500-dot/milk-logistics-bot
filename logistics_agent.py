@@ -44,8 +44,10 @@ def _default_data_dir():
 DATA_DIR = _default_data_dir()
 
 def _default_report_dir():
-    base = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面", "當日車輛報表")
-    if not os.path.isdir(base):
+    onedrive_desk = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
+    if os.path.isdir(onedrive_desk):
+        base = os.path.join(onedrive_desk, "當日車輛報表")
+    else:
         base = os.path.join(os.path.expanduser("~"), "Desktop", "當日車輛報表")
     os.makedirs(base, exist_ok=True)
     return base
