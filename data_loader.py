@@ -10,7 +10,7 @@ data_loader.py — 讀取店家資料 (Excel / CSV)，照車號分組
 
 自動：
   - 地理編碼 (店家地址 + 出發點地址 -> 座標)
-  - 由瓶數計算 下貨時間 (瓶數 * 10 秒)
+  - 由瓶數計算 下貨時間 (瓶數 * 15 秒)
   - 照車號分組，每台車獨立回傳
 
 回傳 (vehicles, stops_by_vehicle, skipped)
@@ -30,7 +30,7 @@ except ImportError:
 from geocoder import geocode
 from route_planner import Stop, Vehicle
 
-SERVICE_SEC_PER_BOTTLE = 10.0
+SERVICE_SEC_PER_BOTTLE = 15.0
 
 
 def _norm_header(h):
