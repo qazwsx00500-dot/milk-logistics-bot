@@ -43,6 +43,44 @@ _ADDR_KEYS = ["店家地址", "地址", "客戶地址", "address", "addr"]
 _QTY_KEYS = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count"]
 _START_KEYS = ["出發點地址", "起點地址", "倉庫地址", "出發地址",
                "start_address", "depot_address", "start", "depot"]
+_FUEL_KEYS = ["油資單價", "油資", "油錢單價", "fuel", "fuel_cost", "fuel_cost_per_km", "元每km"]
+
+
+def _read_fuel_from_rows(rows, headers):
+    """從資料列讀『油資單價』欄：回傳第一個有效值(float)，全空則回 None。全車共用。"""
+    idx_by_norm = {_norm_header(h): h for h in headers}
+    for row in rows:
+        v = _get(row, _FUEL_KEYS, idx_by_norm)
+        if v not in (None, ""):
+            try:
+                f = float(v)
+                if f > 0:
+                    return f
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+def read_fuel_cost(path):
+    """從資料檔(xlsx/csv)讀『油資單價』欄，回傳 float 或 None（供 main 覆蓋 .env）。"""
+    try:
+        if str(path).lower().endswith(".csv"):
+            with open(path, encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                return _read_fuel_from_rows([dict(r) for r in reader], reader.fieldnames or [])
+        if openpyxl is None:
+            return None
+        wb = openpyxl.load_workbook(path, data_only=True)
+        ws = wb.active
+        rows_raw = list(ws.iter_rows(values_only=True))
+        if not rows_raw:
+            return None
+        headers = [str(h) if h is not None else "" for h in rows_raw[0]]
+        rows = [{headers[i]: r[i] for i in range(len(headers))}
+                for r in rows_raw[1:] if not all(v is None for v in r)]
+        return _read_fuel_from_rows(rows, headers)
+    except Exception:
+        return None
 
 
 def _get(row, keys, idx_by_norm):

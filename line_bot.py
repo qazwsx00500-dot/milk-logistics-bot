@@ -182,6 +182,15 @@ def run_plan(data_path=None, rows=None):
         no_google = False
         start_hour = L.DEFAULT_START_HOUR   # 9.5 = 09:30 出車
         fuel_cost = L._load_fuel_cost()
+        # data_path 檔若含『油資單價』欄 → 優先
+        if data_path:
+            try:
+                from data_loader import read_fuel_cost as _rfc
+                _ef = _rfc(data_path)
+                if _ef:
+                    fuel_cost = _ef
+            except Exception:
+                pass
 
         # 把 rows 寫成臨時標準檔（供 data_loader 讀）
         if rows is not None and data_path is None:
@@ -315,7 +324,7 @@ def handle_file(event, file_msg) -> str:
 
     # 2) 轉成標準每日配送表，存成 每日配送_YYYYMMDD.xlsx
     try:
-        rows, skipped, out_path = en.normalize_excel(tmp_in, L.DATA_DIR)
+        rows, skipped, out_path, excel_fuel = en.normalize_excel(tmp_in, L.DATA_DIR)
         if not rows:
             return ("⚠ 無法從這個 Excel 讀到店家資料。\n"
                     "需要的欄位：店家名稱 / 店家地址 / 瓶數（車號可省略，我會自動安排）。")
@@ -328,6 +337,7 @@ def handle_file(event, file_msg) -> str:
         "rows": rows,
         "skipped_n": len(skipped),
         "fname": fname,
+        "excel_fuel": excel_fuel,
         "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
     PENDING_FILES[user_id_key(event)] = pending
@@ -356,6 +366,8 @@ def run_plan_choice(user_id, choice_text, pending):
     import report as report_mod
     import excel_normalizer as en
     fuel_cost = L._load_fuel_cost()
+    if pending.get("excel_fuel"):   # Excel『油資單價』欄優先於 .env/環境變數
+        fuel_cost = pending["excel_fuel"]
     start_hour = L.DEFAULT_START_HOUR
     rows = pending["rows"]
 

@@ -25,6 +25,7 @@ _VEH = ["車號", "車輛", "路線編號", "路線", "route", "vehicle", "車",
 _NAME = ["店家名稱", "名稱", "店名", "客戶名稱", "客戶簡稱", "客戶", "簡稱", "店家", "name", "店", "對象"]
 _ADDR = ["店家地址", "送貨地址", "地址", "客戶地址", "送貨", "address", "addr", "位置"]
 _QTY = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count", "件數", "瓶", "量"]
+_FUEL = ["油資單價", "油資", "油錢單價", "fuel", "fuel_cost", "fuel_cost_per_km", "元每km"]
 
 # 台灣縣市關鍵字（用於無車號時的地理分車）
 _REGION_KEYWORDS = [
@@ -116,9 +117,11 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     col_addr = _match_col(hnorm, _ADDR)
     col_qty = _match_col(hnorm, _QTY)
     col_veh = _match_col(hnorm, _VEH)
+    col_fuel = _match_col(hnorm, _FUEL)
 
     skipped = []
     rows = []
+    fuel_cost = None   # 全車共用油資單價（取第一個有效值）
     for i, r in enumerate(raw[header_row_idx + 1:], header_row_idx + 2):
         if all(v is None or v == "" for v in r):
             continue  # 空列跳過
@@ -135,6 +138,15 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         addr = str(_val(col_addr)).strip()
         qty = _clean_int(_val(col_qty))
         veh = str(_val(col_veh)).strip()
+        if fuel_cost is None:   # 只取第一個有效油資值
+            fv = _val(col_fuel)
+            if fv not in (None, ""):
+                try:
+                    fv = float(fv)
+                    if fv > 0:
+                        fuel_cost = fv
+                except (ValueError, TypeError):
+                    pass
         if not name and not addr:
             skipped.append((f"第{i}列", "店家與地址皆空"))
             continue
@@ -145,7 +157,7 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         rows.append((veh or "", name or f"店家{i}", addr, qty))
 
     if not rows:
-        return [], skipped, None
+        return [], skipped, None, fuel_cost
 
     # 存成標準檔：每日配送_YYYYMMDD.xlsx
     date_str = date_str or datetime.datetime.now().strftime("%Y%m%d")
@@ -159,7 +171,7 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     for veh, name, addr, qty in rows:
         ws2.append([veh, name, addr, qty])
     wb2.save(out_path)
-    return rows, skipped, out_path
+    return rows, skipped, out_path, fuel_cost
 
 
 def region_of(addr: str) -> str:
@@ -206,8 +218,8 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         p = sys.argv[1]
         out = sys.argv[2] if len(sys.argv) > 2 else os.path.dirname(p)
-        rows, skipped, outp = normalize_excel(p, out)
-        print(f"讀到 {len(rows)} 筆，跳過 {len(skipped)} 筆")
+        rows, skipped, outp, fuel = normalize_excel(p, out)
+        print(f"讀到 {len(rows)} 筆，跳過 {len(skipped)} 筆，油資單價={fuel}")
         for r in rows[:5]:
             print(" ", r)
         if outp:
