@@ -665,9 +665,11 @@ def main():
     dispatch_dir = os.path.join(DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
     os.makedirs(dispatch_dir, exist_ok=True)
     dhtml, dcsv = report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": args.start})
+    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"), meta={"start_hour": args.start})
     print(f"🚚 派車單資料夾  ：{dispatch_dir}")
     print(f"🚚 派車單(HTML)  ：{dhtml}")
     print(f"🚚 派車單(CSV)   ：{dcsv}")
+    print(f"📊 整合Excel     ：{xlsx}")
 
 
 def build_map(result, here, use_google):

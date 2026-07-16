@@ -40,6 +40,7 @@ JOBS = [
     ("/route_map",   "REPORT_DIR",   "route_map.html"),
     ("/dispatch",    "DISPATCH_DIR", "dispatch.html"),
     ("/dispatch.csv","DISPATCH_DIR", "dispatch.csv"),
+    ("/workbook",    "DISPATCH_DIR", "整合報表.xlsx"),
 ]
 
 # 雲端「尚未產生」時回的提示字樣（抓到這個就不是真檔，跳過）

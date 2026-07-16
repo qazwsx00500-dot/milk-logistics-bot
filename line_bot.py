@@ -133,6 +133,24 @@ def view_dispatch_csv():
     return Response("尚未產生派車單。", mimetype="text/plain; charset=utf-8")
 
 
+# ---- 整合 Excel 檢視路由（3 分頁：路線總表/各車派車單/總計） ----
+def _today_workbook():
+    import logistics_agent as L
+    day_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    p = os.path.join(day_dir, "整合報表.xlsx")
+    return p if os.path.exists(p) else None
+
+@app.route("/workbook", methods=["GET"])
+def view_workbook():
+    p = _today_workbook()
+    if p:
+        return send_file(p,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         as_attachment=True, download_name="整合報表.xlsx")
+    return Response("尚未產生整合報表。請在 LINE 傳『每日配送.xlsx』或『跑』觸發規劃。",
+                    mimetype="text/plain; charset=utf-8")
+
+
 # ---- 指令處理 ----
 def handle_text(text: str) -> str:
     """回傳要推回 LINE 的文字訊息。"""
@@ -264,6 +282,7 @@ def run_plan(data_path=None, rows=None):
         dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
         os.makedirs(dispatch_dir, exist_ok=True)
         report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": start_hour})
+        xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"), meta={"start_hour": start_hour})
 
         # 文字摘要
         veh_note = ""
@@ -449,6 +468,7 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
     os.makedirs(dispatch_dir, exist_ok=True)
     report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": L.DEFAULT_START_HOUR})
+    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"), meta={"start_hour": L.DEFAULT_START_HOUR})
 
     lines = [f"📦 路線規劃完成（{result.distance_source}）",
              f"🚚 {mode_note}",

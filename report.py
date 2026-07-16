@@ -373,3 +373,93 @@ def build_dispatch_grouped(result, day_dir, meta=None):
     with open(htmlp, "w", encoding="utf-8") as f:
         f.write(html)
     return htmlp, csvp
+
+
+# ---------- 整合 Excel（一份 xlsx，3 分頁） ----------
+
+def build_workbook(result, out_path, meta=None):
+    """產整合 Excel：①路線總表 ②各車派車單 ③油資/里程總計。回傳 out_path。"""
+    import openpyxl
+    from openpyxl.styles import Font, PatternFill, Alignment
+
+    meta = meta or {}
+    start = meta.get("start_hour", 9.5)
+    has_fuel = getattr(result, "fuel_cost_per_km", 0) > 0
+    hdr_font = Font(bold=True, color="FFFFFF")
+    hdr_fill = PatternFill("solid", fgColor="0B6B3A")
+    veh_font = Font(bold=True, color="FFFFFF")
+    veh_fill = PatternFill("solid", fgColor="C0392B")
+    center = Alignment(horizontal="center")
+
+    def _style_header(ws, row=1):
+        for c in ws[row]:
+            c.font = hdr_font; c.fill = hdr_fill; c.alignment = center
+
+    def _autofit(ws):
+        for col in ws.columns:
+            w = max((len(str(c.value)) for c in col if c.value is not None), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(max(w + 2, 8), 48)
+
+    wb = openpyxl.Workbook()
+
+    # ① 路線總表
+    ws1 = wb.active
+    ws1.title = "路線總表"
+    h1 = ["車號", "序號", "店家", "地址", "瓶數", "下貨秒數", "預計到店", "預計離店"]
+    ws1.append(h1)
+    for rt in result.routes:
+        v = rt["vehicle"]
+        for si, s in enumerate(rt["stops"]):
+            a, lv = rt["etas"][si]
+            qty = int(s.demand) if s.demand == int(s.demand) else s.demand
+            ws1.append([v.id, si + 1, s.name, s.address, qty,
+                        int(round(s.service_time)), _hhmm(a), _hhmm(lv)])
+    _style_header(ws1); ws1.freeze_panes = "A2"; _autofit(ws1)
+
+    # ② 各車派車單（每台車一段，段首車號列）
+    ws2 = wb.create_sheet("各車派車單")
+    h2 = ["車號/資訊", "序號", "店家", "地址", "瓶數", "到店", "離店"]
+    ws2.append(h2)
+    for rt in result.routes:
+        v = rt["vehicle"]
+        ret = _hhmm(rt["end_hour"])
+        status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
+        fuel = f"｜油資 {rt.get('fuel_cost', 0):.0f} 元" if has_fuel else ""
+        info = (f"🚚 {v.id}｜起點 {v.start_addr or '—'}｜{len(rt['stops'])}站"
+                f"｜{rt['load']:.0f}瓶｜{rt['distance_km']:.1f}km｜回倉 {ret}（{status}）{fuel}")
+        r = ws2.max_row + 1
+        ws2.append([info])
+        for c in ws2[r]:
+            c.font = veh_font
+        ws2[r][0].fill = veh_fill
+        ws2.merge_cells(start_row=r, start_column=1, end_row=r, end_column=7)
+        for si, s in enumerate(rt["stops"]):
+            a, lv = rt["etas"][si]
+            qty = int(s.demand) if s.demand == int(s.demand) else s.demand
+            ws2.append(["", si + 1, s.name, s.address, qty, _hhmm(a), _hhmm(lv)])
+    _style_header(ws2); ws2.freeze_panes = "A2"; _autofit(ws2)
+
+    # ③ 油資/里程總計
+    ws3 = wb.create_sheet("總計")
+    ws3.append(["項目", "數值"])
+    ws3.append(["出車數", len(result.routes)])
+    ws3.append(["配送店數", sum(len(r["stops"]) for r in result.routes)])
+    ws3.append(["總瓶數", f"{result.total_load:.0f}"])
+    ws3.append(["總實際里程_km", f"{result.total_distance_km:.1f}"])
+    if has_fuel:
+        ws3.append(["油資單價_元每km", f"{result.fuel_cost_per_km:.1f}"])
+        ws3.append(["預估總油資_元", f"{result.total_fuel_cost:.0f}"])
+    ws3.append([])
+    ws3.append(["車號", "站數", "里程_km", "瓶數", "回倉", "狀態"] + (["油資_元"] if has_fuel else []))
+    for rt in result.routes:
+        ret = _hhmm(rt["end_hour"])
+        status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
+        row = [rt["vehicle"].id, len(rt["stops"]), f"{rt['distance_km']:.1f}",
+               f"{rt['load']:.0f}", ret, status]
+        if has_fuel:
+            row.append(f"{rt.get('fuel_cost', 0):.0f}")
+        ws3.append(row)
+    _style_header(ws3); _autofit(ws3)
+
+    wb.save(out_path)
+    return out_path
