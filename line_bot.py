@@ -151,6 +151,23 @@ def view_workbook():
                     mimetype="text/plain; charset=utf-8")
 
 
+# ---- 路線圖 PNG 檢視路由（供本機同步器抓取） ----
+def _today_map_png():
+    import logistics_agent as L
+    day_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    p = os.path.join(day_dir, "route_map.png")
+    return p if os.path.exists(p) else None
+
+@app.route("/map_png", methods=["GET"])
+def view_map_png():
+    p = _today_map_png()
+    if p:
+        return send_file(p, mimetype="image/png",
+                         as_attachment=True, download_name="route_map.png")
+    return Response("尚未產生路線圖。請先傳 Excel 觸發規劃。",
+                    mimetype="text/plain; charset=utf-8")
+
+
 # ---- 指令處理 ----
 def handle_text(text: str) -> str:
     """回傳要推回 LINE 的文字訊息。"""
@@ -276,13 +293,25 @@ def run_plan(data_path=None, rows=None):
         report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                       meta={"start_hour": start_hour})
         report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
-        L.build_map(result, day_dir, use_google)
+        gmap = L.build_map(result, day_dir, use_google)
+        # 路線圖截 PNG（本機/雲端都試；雲端無瀏覽器則回 None，優雅降級）
+        try:
+            from map_capture import capture_map_png
+            map_png = capture_map_png(gmap, os.path.join(day_dir, "route_map.png"))
+        except Exception:
+            map_png = None
 
         # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
         dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
         os.makedirs(dispatch_dir, exist_ok=True)
+        # 路線圖 PNG 也複製到 dispatch_dir（供同步器統一抓）
+        if map_png:
+            import shutil as _sh
+            _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
         report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": start_hour})
-        xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"), meta={"start_hour": start_hour})
+        xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
+                                         meta={"start_hour": start_hour},
+                                         map_png=(os.path.join(dispatch_dir, "route_map.png") if map_png else None))
 
         # 文字摘要
         veh_note = ""
@@ -462,13 +491,23 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                   meta={"start_hour": L.DEFAULT_START_HOUR})
     report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
-    L.build_map(result, day_dir, True)
+    gmap = L.build_map(result, day_dir, True)
+    try:
+        from map_capture import capture_map_png
+        map_png = capture_map_png(gmap, os.path.join(day_dir, "route_map.png"))
+    except Exception:
+        map_png = None
 
     # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
     dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
     os.makedirs(dispatch_dir, exist_ok=True)
+    if map_png:
+        import shutil as _sh
+        _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
     report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": L.DEFAULT_START_HOUR})
-    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"), meta={"start_hour": L.DEFAULT_START_HOUR})
+    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
+                                     meta={"start_hour": L.DEFAULT_START_HOUR},
+                                     map_png=(os.path.join(dispatch_dir, "route_map.png") if map_png else None))
 
     lines = [f"📦 路線規劃完成（{result.distance_source}）",
              f"🚚 {mode_note}",

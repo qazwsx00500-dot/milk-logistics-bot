@@ -377,10 +377,13 @@ def build_dispatch_grouped(result, day_dir, meta=None):
 
 # ---------- 整合 Excel（一份 xlsx，3 分頁） ----------
 
-def build_workbook(result, out_path, meta=None):
-    """產整合 Excel：①路線總表 ②各車派車單 ③油資/里程總計。回傳 out_path。"""
+def build_workbook(result, out_path, meta=None, map_png=None):
+    """產整合 Excel：①路線總表 ②各車派車單 ③油資/里程總計 ④路線圖(可選 PNG)。
+    map_png: 路線圖 PNG 路徑；None 則不加路線圖分頁。回傳 out_path。"""
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
+    from openpyxl.drawing.image import Image as XLImage
+    from openpyxl.utils import get_column_letter
 
     meta = meta or {}
     start = meta.get("start_hour", 9.5)
@@ -460,6 +463,22 @@ def build_workbook(result, out_path, meta=None):
             row.append(f"{rt.get('fuel_cost', 0):.0f}")
         ws3.append(row)
     _style_header(ws3); _autofit(ws3)
+
+    # ④ 路線圖（若有 PNG）
+    if map_png and os.path.exists(map_png):
+        ws4 = wb.create_sheet("路線圖")
+        try:
+            img = XLImage(map_png)
+            # 限制寬度，避免過大；保持比例
+            max_w = 1100
+            if img.width > max_w:
+                ratio = max_w / img.width
+                img.width = max_w
+                img.height = int(img.height * ratio)
+            ws4.add_image(img, "A1")
+            ws4.sheet_view.showGridLines = False
+        except Exception as e:
+            ws4.append([f"路線圖載入失敗：{e}"])
 
     wb.save(out_path)
     return out_path

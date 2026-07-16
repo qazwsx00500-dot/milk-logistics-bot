@@ -656,16 +656,26 @@ def main():
                                          meta={"start_hour": args.start})
     csvp = report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
     gmap = build_map(result, day_dir, use_google)
+    # 路線圖截 PNG（本機有 Edge/Chrome 才成功；雲端無瀏覽器則回 None）
+    from map_capture import capture_map_png
+    map_png = capture_map_png(gmap, os.path.join(day_dir, "route_map.png"))
     print(f"\n📁 報表輸出資料夾：{day_dir}")
     print(f"📄 路線報表(HTML)：{html}")
     print(f"📄 路線報表(CSV) ：{csvp}")
     print(f"🌐 互動地圖      ：{gmap}")
+    if map_png:
+        print(f"🖼️ 路線圖PNG     ：{map_png}")
 
     # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
     dispatch_dir = os.path.join(DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
     os.makedirs(dispatch_dir, exist_ok=True)
+    # 把路線圖 PNG 也複製到 dispatch_dir（供同步器統一抓）
+    if map_png:
+        import shutil as _sh
+        _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
     dhtml, dcsv = report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": args.start})
-    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"), meta={"start_hour": args.start})
+    xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
+                                     meta={"start_hour": args.start}, map_png=(os.path.join(dispatch_dir, "route_map.png") if map_png else None))
     print(f"🚚 派車單資料夾  ：{dispatch_dir}")
     print(f"🚚 派車單(HTML)  ：{dhtml}")
     print(f"🚚 派車單(CSV)   ：{dcsv}")
