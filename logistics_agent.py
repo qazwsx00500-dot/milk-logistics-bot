@@ -96,7 +96,7 @@ def make_sample(path):
         ["車號", "必填", "同一台車的點填相同車號，如 車01 / 車A。程式照車號分組，每台車獨立排順序"],
         ["店家名稱", "必填", "店家名稱，會顯示在報表與地圖"],
         ["店家地址", "必填", "完整地址(到門牌)，用 Google 精準定位。例: 台中市大雅區101-1號"],
-        ["瓶數", "必填", "鮮奶瓶數。下貨時間=瓶數×15秒，並計入到店預估時間"],
+        ["瓶數", "必填", "鮮奶瓶數。下貨時間=瓶數×10秒，並計入到店預估時間"],
         ["", "", ""],
         ["出發點", "總倉統一", f"所有車都從總倉出發並回到總倉：{DEPOT_ADDR}（已在程式設定，Excel 不需填出發點）"],
         ["用法", "", "填好後執行: python logistics_agent.py --data 路徑/每日配送.xlsx"],
@@ -175,7 +175,8 @@ def _merge_line(m_km, m_dur, vid, coords):
 
 
 def _load_fuel_cost():
-    """從 .env 讀油資參數：優先用 FUEL_COST_PER_KM，否則用 油耗×油價 推算。"""
+    """讀油資參數：優先環境變數(Render 用)，其次 .env 檔(本機用)；
+    優先 FUEL_COST_PER_KM，否則用 油耗×油價(FUEL_EFFICIENCY×FUEL_PRICE)推算。"""
     env = {}
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
     if os.path.exists(p):
@@ -184,13 +185,18 @@ def _load_fuel_cost():
             if line and not line.startswith("#") and "=" in line:
                 k, v = line.split("=", 1)
                 env[k.strip()] = v.strip().strip('"').strip("'")
-    if env.get("FUEL_COST_PER_KM"):
+
+    def get(key):
+        # 環境變數優先(Render)，再退回 .env(本機)
+        return os.environ.get(key) or env.get(key)
+
+    if get("FUEL_COST_PER_KM"):
         try:
-            return float(env["FUEL_COST_PER_KM"])
+            return float(get("FUEL_COST_PER_KM"))
         except ValueError:
             pass
-    eff = env.get("FUEL_EFFICIENCY")
-    price = env.get("FUEL_PRICE")
+    eff = get("FUEL_EFFICIENCY")
+    price = get("FUEL_PRICE")
     if eff and price:
         try:
             eff = float(eff); price = float(price)

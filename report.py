@@ -132,7 +132,7 @@ def build_html(result, depot, out_path, meta=None):
 </div>
 {route_cards}
 {skip_html}
-<footer>本報表由物流路線規劃 Agent 雛形產出 · 時間含每瓶 15 秒下貨</footer>
+<footer>本報表由物流路線規劃 Agent 雛形產出 · 時間含每瓶 10 秒下貨</footer>
 </div></body></html>"""
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -240,7 +240,7 @@ def build_html_grouped(result, out_path, meta=None):
 </div>
 {cards}
 {skip_html}
-<footer>本報表由物流路線規劃 Agent 產出 · 下貨時間按每瓶 15 秒計算</footer>
+<footer>本報表由物流路線規劃 Agent 產出 · 下貨時間按每瓶 10 秒計算</footer>
 </div></body></html>"""
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -303,10 +303,14 @@ def build_dispatch_grouped(result, day_dir, meta=None):
         w.writerow(["=== 派車單總計 ==="])
         w.writerow(["出車數", len(result.routes)])
         w.writerow(["總瓶數", f"{result.total_load:.0f}"])
+        if getattr(result, "fuel_cost_per_km", 0) > 0:
+            w.writerow(["油資單價_元每km", f"{result.fuel_cost_per_km:.1f}"])
+            w.writerow(["預估總油資_元", f"{result.total_fuel_cost:.0f}"])
         for rt in result.routes:
             ret = _hhmm(rt["end_hour"])
             status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
-            w.writerow([rt["vehicle"].id, "里程_km", f"{rt['distance_km']:.1f}", "回倉", ret, status])
+            fuel = f"油資_{rt.get('fuel_cost',0):.0f}元" if getattr(result, "fuel_cost_per_km", 0) > 0 else ""
+            w.writerow([rt["vehicle"].id, "里程_km", f"{rt['distance_km']:.1f}", "回倉", ret, status, fuel])
 
     # HTML：每台車一張卡片，司機視角
     cards = ""
@@ -315,6 +319,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
         ret = _hhmm(rt["end_hour"])
         on_time = rt.get("on_time", True)
         tag = '<span class="ok">✅ 準時回倉</span>' if on_time else f'<span class="warn">⚠ 超過17:30（{ret}）</span>'
+        fuel_txt = f" ｜ 油資 {rt.get('fuel_cost', 0):.0f} 元" if getattr(result, "fuel_cost_per_km", 0) > 0 else ""
         rows_html = ""
         for si, s in enumerate(rt["stops"]):
             a, lv = rt["etas"][si]
@@ -328,7 +333,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
         <div class="card">
           <div class="card-h">🚚 {v.id} 派車單</div>
           <div class="card-meta">起點 {v.start_addr or '—'} ｜ {len(rt['stops'])} 站 ｜
-            總瓶數 {rt['load']:.0f} ｜ 里程 {rt['distance_km']:.1f} km ｜ 回倉 {ret}（目標17:30）{tag}</div>
+            總瓶數 {rt['load']:.0f} ｜ 里程 {rt['distance_km']:.1f} km ｜ 回倉 {ret}（目標17:30）{tag}{fuel_txt}</div>
           <table>
             <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
@@ -360,7 +365,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
 </style></head>
 <body><div class="wrap">
 <header><h1>🚚 鮮奶配送派車單</h1>
-<div class="sub">出發 {_hhmm(start)} ｜ 生成 {gen} ｜ 下貨每瓶 15 秒</div></header>
+<div class="sub">出發 {_hhmm(start)} ｜ 生成 {gen} ｜ 下貨每瓶 10 秒{f" ｜ 預估總油資 {result.total_fuel_cost:.0f} 元（{result.fuel_cost_per_km:.1f} 元/km）" if getattr(result, "fuel_cost_per_km", 0) > 0 else ""}</div></header>
 {cards}
 <footer>本派車單由物流路線規劃 Agent 產出 · 每台車一份，司機拿著跑</footer>
 </div></body></html>"""
