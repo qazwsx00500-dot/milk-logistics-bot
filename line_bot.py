@@ -293,21 +293,14 @@ def run_plan(data_path=None, rows=None):
         report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                       meta={"start_hour": start_hour})
         report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
-        gmap = L.build_map(result, day_dir, use_google)
-        # 路線圖截 PNG（本機/雲端都試；雲端無瀏覽器則回 None，優雅降級）
-        try:
-            from map_capture import capture_map_png
-            map_png = capture_map_png(gmap, os.path.join(day_dir, "route_map.png"))
-        except Exception:
-            map_png = None
+        L.build_map(result, day_dir, use_google)
+        # 路線圖 PNG 由本機直跑時產生（本機有 Edge/Chrome）；雲端(Render)無瀏覽器，
+        # 不嘗試截圖。使用者於本機執行 sync_from_render.py 會抓本機已產出的 PNG。
+        map_png = None
 
         # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
         dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
         os.makedirs(dispatch_dir, exist_ok=True)
-        # 路線圖 PNG 也複製到 dispatch_dir（供同步器統一抓）
-        if map_png:
-            import shutil as _sh
-            _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
         report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": start_hour})
         xlsx = report_mod.build_workbook(result, os.path.join(dispatch_dir, "整合報表.xlsx"),
                                          meta={"start_hour": start_hour},
@@ -491,12 +484,9 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                   meta={"start_hour": L.DEFAULT_START_HOUR})
     report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
-    gmap = L.build_map(result, day_dir, True)
-    try:
-        from map_capture import capture_map_png
-        map_png = capture_map_png(gmap, os.path.join(day_dir, "route_map.png"))
-    except Exception:
-        map_png = None
+    L.build_map(result, day_dir, True)
+    # 路線圖 PNG 由本機直跑時產生（本機有 Edge/Chrome）；雲端(Render)無瀏覽器，不嘗試截圖。
+    map_png = None
 
     # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
     dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
