@@ -318,21 +318,32 @@ def _hhmm(h):
 # ---- Webhook ----
 import threading
 
+# 最近一次處理結果（Push 失敗時的備援，可從 /last_result 網頁查看）
+LAST_RESULT = {"ts": None, "text": "(尚無結果)", "pushed": None, "error": None}
+
 def _push_to(user_id, text):
     """用 Push 推結果給使用者（繞過 reply_token 1 秒過期限制）。"""
+    global LAST_RESULT
     try:
         from linebot.v3.messaging.models import PushMessageRequest
+        if not user_id:
+            raise ValueError("user_id 為空，無法 Push（可能事件結構不含 source.user_id）")
         messaging_api.push_message(
             PushMessageRequest(
                 to=user_id,
                 messages=[TextMessage(text=text[:1900])],
             )
         )
-    except Exception:
+        LAST_RESULT["pushed"] = True
+    except Exception as e:
+        LAST_RESULT["pushed"] = False
+        LAST_RESULT["error"] = f"{type(e).__name__}: {str(e)[:200]}"
         traceback.print_exc()
 
 def _process_and_push(user_id, kind, payload):
     """背景執行緒：實際處理（可能幾十秒），完成後用 Push 推結果。"""
+    global LAST_RESULT
+    import datetime as _dt
     try:
         if kind == "text":
             result = handle_text(payload)
@@ -343,6 +354,8 @@ def _process_and_push(user_id, kind, payload):
     except Exception as e:
         traceback.print_exc()
         result = f"⚠ 處理時發生錯誤：{type(e).__name__}: {str(e)[:120]}"
+    LAST_RESULT["ts"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    LAST_RESULT["text"] = result
     _push_to(user_id, result)
 
 @app.route("/callback", methods=["POST", "GET"])
@@ -368,10 +381,11 @@ def callback():
         user_id = getattr(getattr(event, "source", None), "user_id", None)
         # 立即 reply 一個確認（reply_token 1 秒內必須用掉）
         try:
+            extra = f"\n📋 結果也會貼在：{PUBLIC_URL}/last_result" if PUBLIC_URL else ""
             messaging_api.reply_message(
                 ReplyMessageRequest(
                     reply_token=event.reply_token,
-                    messages=[TextMessage(text="✅ 收到，處理中…（完成後我會主動推播結果）")],
+                    messages=[TextMessage(text="✅ 收到，處理中…（完成後我會主動推播結果）" + extra)],
                 )
             )
         except Exception:
@@ -387,6 +401,18 @@ def callback():
                                        {"event": event, "file_msg": event.message}), daemon=True)
             t.start()
     return "OK"
+
+
+@app.route("/last_result", methods=["GET"])
+def view_last_result():
+    """最近一次處理結果（Push 失敗時的備援檢視）。"""
+    pushed = LAST_RESULT.get("pushed")
+    status = "已 Push" if pushed is True else ("Push 失敗" if pushed is False else "尚未處理")
+    body = (f"處理時間: {LAST_RESULT.get('ts')}\n"
+            f"Push 狀態: {status}\n"
+            f"Push 錯誤: {LAST_RESULT.get('error') or '無'}\n"
+            f"{'='*30}\n\n{LAST_RESULT.get('text')}")
+    return Response(body, mimetype="text/plain; charset=utf-8")
 
 
 if __name__ == "__main__":
