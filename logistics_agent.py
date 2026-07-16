@@ -561,6 +561,8 @@ def main():
     ap.add_argument("--straight", action="store_true", help="強制直線距離/估速")
     ap.add_argument("--no-google", action="store_true", help="暫不走 Google，改 OSRM")
     ap.add_argument("--start", type=float, default=DEFAULT_START_HOUR, help="出發時間(24h, 預設9.5=09:30)")
+    ap.add_argument("--auto", action="store_true", help="強制自動分車：忽略 Excel 車號欄，依 17:30 回倉自動分成多台車（最多3台）")
+    ap.add_argument("--vehicles", type=int, default=None, help="搭配 --auto：強制分剛好 N 台車（忽略 17:30 時間窗，只求最短路線）")
     args = ap.parse_args()
 
     here = os.path.dirname(os.path.abspath(__file__))
@@ -584,16 +586,20 @@ def main():
 
     use_google = not args.straight
     fuel_cost = _load_fuel_cost()
-    # 智慧判斷：無車號 → 均衡自動分車(含嘉義例外)；有車號 → 照車號排序
+    # 智慧判斷：--auto 強制自動分車；無車號 → 均衡自動分車(含嘉義例外)；有車號 → 照車號排序
     had_no_vehicle = False
     try:
         _v, _sbv, _sk = load(args.data, depot=DEPOT)
         had_no_vehicle = all((getattr(v, "id", "") or "").strip() == "未分車" for v in _v) if _v else False
     except Exception:
         had_no_vehicle = False
-    if had_no_vehicle:
-        print("   (偵測到無車號 → 走均衡自動分車，含嘉義例外)")
-        result, skipped = plan_auto_assign(args.start, args.data, use_google, args.no_google, fuel_cost_per_km=fuel_cost)
+    if args.auto or had_no_vehicle:
+        if args.auto and not had_no_vehicle:
+            print("   (--auto：忽略 Excel 車號欄，強制走均衡自動分車，含嘉義例外)")
+        else:
+            print("   (偵測到無車號 → 走均衡自動分車，含嘉義例外)")
+        result, skipped = plan_auto_assign(args.start, args.data, use_google, args.no_google,
+                                           fuel_cost_per_km=fuel_cost, force_vehicles=args.vehicles)
     else:
         result, skipped = plan(args.start, args.data, use_google, args.no_google, fuel_cost_per_km=fuel_cost)
     if result is None:
