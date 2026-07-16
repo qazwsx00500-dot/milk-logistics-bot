@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-TW"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>鮮奶配送路線地圖</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>html,body{margin:0;height:100%;font-family:-apple-system,"Microsoft JhengHei",sans-serif;}
+#map{height:100%;width:100%;}
+.panel{position:absolute;top:10px;right:10px;z-index:1000;background:#fff;padding:10px 12px;
+border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.2);max-height:90%;overflow:auto;min-width:230px;font-size:13px;}
+.panel h3{margin:0 0 6px;font-size:14px;}
+.leg{display:flex;align-items:center;gap:6px;margin:3px 0;}
+.sw{width:14px;height:14px;border-radius:3px;flex:0 0 auto;}</style></head>
+<body><div id="map"></div><div class="panel" id="panel"></div>
+<script>
+const DATA = {"depot": null, "routes": [{"color": "#e6194b", "vehicle": "車01", "distance": 211.8, "load": 455.0, "points": [[24.2308043, 120.6657283], [23.9702014, 120.9729085], [23.9673771, 120.9623546], [23.8174527, 120.8537037], [23.7564949, 120.6843344], [23.761323, 120.694869], [23.8335411, 120.636361], [23.8335411, 120.636361], [23.8383472, 120.7018195], [23.9290254, 120.695066], [23.9290254, 120.695066], [23.977571, 120.682932], [24.1098715, 120.6900744], [24.2308043, 120.6657283]], "stops": [{"name": "鮮奶奶-埔里", "demand": 20.0, "addr": "南投縣埔里鎮中華路196號"}, {"name": "TEATOP第一味-W3/W5埔里南昌店", "demand": 20.0, "addr": "南投縣埔里鎮南昌街313號-隨貨附發票"}, {"name": "TEATOP第一味-W3/W5水里中央店", "demand": 25.0, "addr": "南投縣水里鄉中央村太平街1號-隨貨附發票"}, {"name": "TEATOP第一味-W3/W5南投竹山店(直)", "demand": 60.0, "addr": "南投縣竹山鎮中正里下橫街47-2號"}, {"name": "TEATOP第一味-W3/W5南投竹山二店(直)", "demand": 20.0, "addr": "南投縣竹山鎮集山路三段443號1樓"}, {"name": "TEATOP第一味-W3/W5松柏嶺店", "demand": 15.0, "addr": "南投縣名間鄉松山村名松路二段177號1樓-隨貨附發票"}, {"name": "TEATOP第一味-W3/W5松柏嶺店", "demand": 25.0, "addr": "南投縣名間鄉松山村名松路二段177號1樓-隨貨附發票"}, {"name": "TEATOP第一味-W3/W5南投名間店", "demand": 70.0, "addr": "南投縣名間鄉南雅街149-2號-隨貨附發票"}, {"name": "TEATOP第一味-W3/W5南投中興新村店", "demand": 10.0, "addr": "南投市光明南路67-1號-隨貨附發票"}, {"name": "TEATOP第一味-W3/W5南投中興新村店", "demand": 10.0, "addr": "南投市光明南路67-1號-隨貨附發票"}, {"name": "TEATOP第一味-W3/W5南投草屯中山店", "demand": 20.0, "addr": "南投縣草屯鎮中山街174號-隨貨附發票"}, {"name": "UG台中大里店(田加渴商行)", "demand": 160.0, "addr": "台中市大里區中興路二段476號-隨貨發票"}]}, {"color": "#3cb44b", "vehicle": "車02", "distance": 19.4, "load": 112.0, "points": [[24.2308043, 120.6657283], [24.1744934, 120.6445078], [24.2308043, 120.6657283]], "stops": [{"name": "UG台中逢甲店(晶赫茶行)", "demand": 112.0, "addr": "台中市西屯區西屯路二段272號-隨貨發票"}]}, {"color": "#4363d8", "vehicle": "車03", "distance": 9.0, "load": 70.0, "points": [[24.2308043, 120.6657283], [24.216097, 120.6907231], [24.2308043, 120.6657283]], "stops": [{"name": "蕃茄村企業", "demand": 70.0, "addr": "台中市潭子區雅潭路二段282號"}]}, {"color": "#f58231", "vehicle": "車04", "distance": 10.8, "load": 20.0, "points": [[24.2308043, 120.6657283], [24.2006224, 120.6862964], [24.2308043, 120.6657283]], "stops": [{"name": "六兵衛 漢神洲際店", "demand": 20.0, "addr": "台中市北屯區崇德路3段865號3樓"}]}, {"color": "#911eb4", "vehicle": "車05", "distance": 21.5, "load": 16.0, "points": [[24.2308043, 120.6657283], [24.1647672, 120.6434748], [24.2308043, 120.6657283]], "stops": [{"name": "新光三越(月結不秀金額)", "demand": 16.0, "addr": "臺中市西屯區臺灣大道三段301號"}]}, {"color": "#46f0f0", "vehicle": "車06", "distance": 91.6, "load": 20.0, "points": [[24.2308043, 120.6657283], [23.9098199, 120.6905119], [24.2308043, 120.6657283]], "stops": [{"name": "TEATOP第一味-W3/W5南投民族店", "demand": 20.0, "addr": "南投市民族路137號-隨貨附發票"}]}, {"color": "#f032e6", "vehicle": "車07", "distance": 26.6, "load": 144.0, "points": [[24.2308043, 120.6657283], [24.1517512, 120.661866], [24.2308043, 120.6657283]], "stops": [{"name": "UG台中勤美店(綠祿飲料商行)", "demand": 144.0, "addr": "台中市西區美村路一段135號-隨貨發票"}]}]};
+const map = L.map('map').setView([24.99, 121.55], 11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; OpenStreetMap'}).addTo(map);
+const panel = document.getElementById('panel');
+let html = '<h3>🚚 路線清單</h3>';
+DATA.routes.forEach((r) => {
+  L.polyline(r.points, {color: r.color, weight:4, opacity:.85}).addTo(map);
+  const start = r.points[0];
+  L.circleMarker(start, {radius:8, color:'#000', weight:2, fillColor:'#ffd700', fillOpacity:1}).addTo(map)
+    .bindPopup('<b>'+r.vehicle+' 起點</b><br>'+r.vehicle);
+  r.stops.forEach((s, idx) => {
+    const pos = r.points[idx+1];
+    L.circleMarker(pos, {radius:6, color:'#fff', weight:2, fillColor:r.color, fillOpacity:1}).addTo(map)
+      .bindPopup('<b>'+r.vehicle+'</b><br>'+s.name+'<br>'+s.addr+'<br>瓶數: '+s.demand);
+  });
+  html += '<div class="leg"><span class="sw" style="background:'+r.color+'"></span><span><b>'+r.vehicle+'</b> · '+r.distance+' km · '+r.load+' 瓶</span></div>';
+});
+panel.innerHTML = html;
+const all = []; DATA.routes.forEach(r => r.points.forEach(p => all.push(p)));
+if (all.length) map.fitBounds(all);
+</script></body></html>

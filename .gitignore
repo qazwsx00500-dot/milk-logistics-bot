@@ -1,0 +1,20 @@
+# 專案設定 / 金鑰 (絕對不能上傳)
+.env
+
+# Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# 產出檔 / 資料 (依需求可保留, 但 git 不追蹤)
+*.xlsx
+*.xlsm
+_normalized_tmp.xlsx
+*.log
+
+# 二進位工具 (本機用, 不進 git)
+cloudflared.exe
+
+# 啟動腳本中的暫存
+.venv/
+venv/
