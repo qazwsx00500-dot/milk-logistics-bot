@@ -201,37 +201,22 @@ def run_plan(data_path=None, rows=None):
             wb.save(tmp)
             data_path = tmp
 
+        # 無車號 → 先填 車01 (auto_assign_vehicles 保守起點, 供 solve_grouped 跑第一次)
+        # 註：改用 L.plan_auto_assign 單輪處理（不再雙重 L.plan），故無車號時直接走自動分車
         if not data_path or not os.path.exists(data_path):
             return (f"⚠ 找不到資料檔。\n請直接把 Excel 傳給我，或先放到『路線規劃』資料夾。")
 
-        result, skipped = L.plan(start_hour, data_path, use_google, no_google, fuel_cost_per_km=fuel_cost)
+        # 路線規劃：有車號走一般 plan；無車號走單輪自動分車(全站只打一次矩陣)
+        if rows is not None and had_no_vehicle:
+            result, skipped = L.plan_auto_assign(
+                start_hour, data_path, use_google, no_google,
+                fuel_cost_per_km=fuel_cost)
+        else:
+            result, skipped = L.plan(
+                start_hour, data_path, use_google, no_google,
+                fuel_cost_per_km=fuel_cost)
         if result is None:
             return "⚠ 排程失敗：沒有可規劃的車輛/店家。請檢查 Excel 欄位。"
-
-        # 無車號 → 依「時間窗 + 最短距離」自動分車 (最多3台, 一台跑不完才加車)
-        if rows is not None and had_no_vehicle:
-            if len(result.routes) == 1 and not result.routes[0].get("on_time"):
-                import auto_router
-                stops = result.routes[0]["stops"]
-                depot = L.DEPOT
-                real_end = result.routes[0].get("end_hour") or result.routes[0].get("return_hour")
-                groups = auto_router.decide_groups(
-                    stops, depot, start_hour, L.TARGET_RETURN_HOUR, max_vehicles=3,
-                    precomputed_end_hour=real_end)
-                if len(groups) > 1:
-                    # 按群重寫臨時 xlsx (車01/車02/車03)
-                    import openpyxl as _ox
-                    from openpyxl import Workbook as _WB
-                    tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
-                    wb = _WB(); ws = wb.active; ws.title = "每日配送"
-                    ws.append(["車號", "店家名稱", "店家地址", "瓶數"])
-                    for gi, g in enumerate(groups, 1):
-                        veh = f"車{gi:02d}"
-                        for si in g:
-                            s = stops[si]
-                            ws.append([veh, s.name, s.address, int(s.demand or 0)])
-                    wb.save(tmp)
-                    result, skipped = L.plan(start_hour, tmp, use_google, no_google, fuel_cost_per_km=fuel_cost)
 
         # 產報表到 日期子資料夾
         day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))

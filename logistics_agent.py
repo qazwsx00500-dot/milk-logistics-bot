@@ -232,6 +232,192 @@ def plan(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0):
     return result, skipped
 
 
+def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0, max_vehicles=3):
+    """無車號時的單輪自動分車：全站只打「一次」真實距離矩陣，
+    拆群(1→3台)時直接從同一次矩陣切出子矩陣複用，避免重複打 Google/OSRM。"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    if not fuel_cost_per_km:
+        fuel_cost_per_km = _load_fuel_cost()
+    # 總倉座標
+    if DEPOT.lat == 0.0 and DEPOT.lon == 0.0:
+        try:
+            from geocoder import geocode
+            c = geocode(DEPOT.address)
+            if c:
+                DEPOT.lat, DEPOT.lon = c
+        except Exception:
+            pass
+    print(f"🏭 總倉出發點：{DEPOT.address}  ({DEPOT.lat:.4f}, {DEPOT.lon:.4f})")
+
+    print(f"📂 讀取店家資料：{data_path}")
+    vehicles, stops_by_vehicle, skipped = load(data_path, depot=DEPOT)
+    if not vehicles:
+        print("⚠ 沒有可規劃的車輛/店家，請檢查資料。")
+        return None, skipped
+
+    # 合并所有站點（無車號 → 全部歸到同一臨時群）
+    all_stops = []
+    for v in vehicles:
+        all_stops.extend(stops_by_vehicle.get(v.id, []))
+
+    # ---- 嘉義列為例外：剔除不參與分車/最佳化（單程過遠會拖垮時間窗）----
+    chiayi_stops = [s for s in all_stops
+                    if "嘉義" in (getattr(s, "address", "") or "")
+                    or "嘉義" in (getattr(s, "name", "") or "")]
+    if chiayi_stops:
+        all_stops = [s for s in all_stops if s not in chiayi_stops]
+        for s in chiayi_stops:
+            skipped.append((s.name, "嘉義例外(單程過遠，不納入時間窗最佳化)"))
+        print(f"   ⚠ 嘉義例外：{len(chiayi_stops)} 站不納入自動分車（列為例外）。")
+
+    total_stops = len(all_stops)
+    if total_stops == 0:
+        return None, skipped
+    print(f"   共 {total_stops} 個配送點（無車號 → 由 Agent 自動分車，最多 {max_vehicles} 台）。")
+
+    # ---- 全站只打一次真實矩陣 ----
+    coords = [(DEPOT.lat, DEPOT.lon)] + [(s.lat, s.lon) for s in all_stops]  # 0=倉, 1..n=站
+    FULL = "__ALL__"
+    matrix_km_full = None
+    duration_matrix_full = None
+    source = "haversine"
+
+    if use_google:
+        ok = False
+        if not no_google:
+            try:
+                m, d, src = g_distance_matrix(coords, fast_fail=True)
+                n = len(coords)
+                matrix_km_full = {}
+                duration_matrix_full = {}
+                for i in range(n):
+                    for j in range(n):
+                        matrix_km_full[(FULL, i, j)] = m[i][j]
+                        duration_matrix_full[(FULL, i, j)] = d[i][j]
+                source = src
+                ok = True
+            except Exception:
+                pass
+        if not ok:
+            try:
+                m, d, src = osrm_matrix_dur(coords)
+                if src != "fallback":
+                    n = len(coords)
+                    matrix_km_full = {}
+                    duration_matrix_full = {}
+                    for i in range(n):
+                        for j in range(n):
+                            matrix_km_full[(FULL, i, j)] = m[i][j]
+                            duration_matrix_full[(FULL, i, j)] = d[i][j]
+                    source = src
+                    ok = True
+            except Exception:
+                pass
+        if not ok:
+            # 都失敗 → 降級直線（matrix 留 None，solver 用 Haversine）
+            source = "fallback"
+            matrix_km_full = None
+            duration_matrix_full = None
+
+    src_map = {"haversine": "直線估算", "google": "Google Maps",
+               "osrm": "OSRM", "fallback": "直線估算(降級)"}
+    print(f"   距離來源：{src_map.get(source, source)}（全站單次矩陣）")
+
+    # ---- 依時間窗決定分幾群（均衡分車：k-means 初始 + 負載均衡） ----
+    import auto_router
+    if matrix_km_full is not None:
+        # balanced_groups 需要 (i,j) 直接索引的矩陣（0=倉, 1..n=站），
+        # 這裡從 (FULL,i,j) 轉成 (i,j)
+        n = len(coords)
+        m_ij = {(i, j): matrix_km_full[(FULL, i, j)] for i in range(n) for j in range(n)}
+        d_ij = {(i, j): duration_matrix_full[(FULL, i, j)] for i in range(n) for j in range(n)}
+        groups = auto_router.balanced_groups(
+            all_stops, DEPOT, start_hour, TARGET_RETURN_HOUR, max_vehicles=max_vehicles,
+            matrix=m_ij, duration=d_ij)
+    else:
+        # 無矩陣（直線模式）：用 haversine 粗估均衡
+        groups = auto_router.balanced_groups(
+            all_stops, DEPOT, start_hour, TARGET_RETURN_HOUR, max_vehicles=max_vehicles)
+
+    # ---- 拆成多台車，並從全矩陣切出各車子矩陣，逐群 solve ----
+    new_vehicles = []
+    new_stops = {}
+    for gi, g in enumerate(groups, 1):
+        veh_id = f"車{gi:02d}"
+        sub = [all_stops[si] for si in g]
+        new_vehicles.append(Vehicle(id=veh_id, name=veh_id,
+                                    start_lat=DEPOT.lat, start_lon=DEPOT.lon,
+                                    start_addr=DEPOT.address))
+        new_stops[veh_id] = sub
+
+    # 逐群用全域矩陣切片成局部矩陣後 solve（與 auto_router.group_end_hour_real 同一套切片，確保一致）
+    per_vehicle_routes = []
+    total_dist = 0.0
+    total_load = 0.0
+    total_fuel = 0.0
+    for gi, g in enumerate(groups, 1):
+        veh_id = f"車{gi:02d}"
+        sub = new_stops[veh_id]
+        km_local = None
+        dur_local = None
+        if matrix_km_full is not None:
+            k = len(g)
+            local_to_global = [0] + [si + 1 for si in g]
+            km_local = {(veh_id, 0, 0): 0.0}
+            dur_local = {(veh_id, 0, 0): 0.0}
+            for li in range(k + 1):
+                for lj in range(k + 1):
+                    gn_i = local_to_global[li]
+                    gn_j = local_to_global[lj]
+                    km_local[(veh_id, li, lj)] = matrix_km_full[(FULL, gn_i, gn_j)]
+                    dur_local[(veh_id, li, lj)] = duration_matrix_full[(FULL, gn_i, gn_j)]
+        res = solve_grouped([new_vehicles[gi - 1]], {veh_id: sub},
+                            matrix_km=km_local, duration_matrix=dur_local,
+                            distance_source=source, start_hour=start_hour,
+                            fuel_cost_per_km=fuel_cost_per_km)
+        rt = res.routes[0]
+        rt["vehicle"] = new_vehicles[gi - 1]
+        rt["return_hour"] = rt.get("end_hour", 0)
+        rt["on_time"] = rt["return_hour"] <= TARGET_RETURN_HOUR
+        per_vehicle_routes.append(rt)
+        total_dist += rt["distance_km"]
+        total_load += rt["load"]
+        total_fuel += rt.get("fuel_cost", 0)
+
+    # 組成 PlanResult
+    from route_planner import PlanResult
+    result = PlanResult()
+    result.routes = sorted(per_vehicle_routes, key=lambda r: r["vehicle"].id)
+    result.distance_source = source
+    result.fuel_cost_per_km = fuel_cost_per_km
+    result.total_distance_km = total_dist
+    result.total_load = total_load
+    result.total_fuel_cost = total_fuel
+    result.skipped = skipped
+    result.summary = _make_summary_like(result)
+    return result, skipped
+
+
+def _make_summary_like(result):
+    src_map = {"haversine": "直線估算", "google": "Google Maps",
+               "osrm": "OSRM", "fallback": "直線估算(降級)"}
+    src = src_map.get(result.distance_source, result.distance_source)
+    lines = [f"出車數：{len(result.routes)} 台",
+             f"距離來源：{src}",
+             f"總配送距離：{result.total_distance_km:.1f} km",
+             f"總瓶數：{result.total_load:.0f}"]
+    if result.fuel_cost_per_km > 0:
+        lines.append(f"油資單價：{result.fuel_cost_per_km:.1f} 元/km")
+        lines.append(f"預估總油資：{result.total_fuel_cost:.0f} 元")
+    for rt in result.routes:
+        v = rt["vehicle"]
+        ret = _hhmm(rt["end_hour"])
+        tag = "準時回倉" if rt.get("on_time") else f"超過17:30({ret})"
+        lines.append(f"  {v.id}：{len(rt['stops'])} 站 / {rt['distance_km']:.1f} km / "
+                     f"{rt['load']:.0f} 瓶 / 回到起點 {ret}（{tag}）")
+    return "\n".join(lines)
+
+
 def main():
     ap = argparse.ArgumentParser(description="鮮奶物流分組路線規劃 Agent")
     ap.add_argument("--data", help="每日配送資料 (xlsx/csv)")
@@ -262,7 +448,18 @@ def main():
 
     use_google = not args.straight
     fuel_cost = _load_fuel_cost()
-    result, skipped = plan(args.start, args.data, use_google, args.no_google, fuel_cost_per_km=fuel_cost)
+    # 智慧判斷：無車號 → 均衡自動分車(含嘉義例外)；有車號 → 照車號排序
+    had_no_vehicle = False
+    try:
+        _v, _sbv, _sk = load(args.data, depot=DEPOT)
+        had_no_vehicle = all((getattr(v, "id", "") or "").strip() == "未分車" for v in _v) if _v else False
+    except Exception:
+        had_no_vehicle = False
+    if had_no_vehicle:
+        print("   (偵測到無車號 → 走均衡自動分車，含嘉義例外)")
+        result, skipped = plan_auto_assign(args.start, args.data, use_google, args.no_google, fuel_cost_per_km=fuel_cost)
+    else:
+        result, skipped = plan(args.start, args.data, use_google, args.no_google, fuel_cost_per_km=fuel_cost)
     if result is None:
         return
 
@@ -308,12 +505,11 @@ def build_map(result, here, use_google):
     import json
     from osrm_client import get_route_geometry
     routes_geo = []
-    # 統一藍色路線（使用者要求）
-    ROUTE_COLOR = "#1a73e8"
-    colors = [ROUTE_COLOR] * 10
+    # 路線顏色：依車數產 N 條，依序 紅/黃/藍（最多 3 台）
+    ROUTE_COLORS = ["#e53935", "#fdd835", "#1e88e5"]  # 紅、黃、藍
     for i, rt in enumerate(result.routes):
         v = rt["vehicle"]
-        color = colors[i % len(colors)]
+        color = ROUTE_COLORS[i % len(ROUTE_COLORS)]
         points = [(v.start_lat, v.start_lon)] + [(s.lat, s.lon) for s in rt["stops"]] + [(v.start_lat, v.start_lon)]
         # 真實道路折線：逐段向 OSRM 取幾何，失敗則退回直線連接
         line = get_route_geometry(points)
@@ -387,7 +583,7 @@ DATA.routes.forEach((r) => {
   });
   html += '<div class="leg"><span class="sw" style="background:'+r.color+'"></span><span><b>'+r.vehicle+'</b> · '+r.distance+' km · '+r.load+' 瓶 · 共 '+r.stops.length+' 站</span></div>';
 });
-panel.innerHTML = html;
+panel.innerHTML = '<h3>🚚 路線清單（顏色：紅=第1台 / 黃=第2台 / 藍=第3台）</h3>' + html.replace('<h3>🚚 路線清單（點標記看詳情）</h3>','');
 const all = []; DATA.routes.forEach(r => r.points.forEach(p => all.push(p)));
 if (all.length) {
   allBounds = L.latLngBounds(all);

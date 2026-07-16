@@ -56,12 +56,16 @@ def geocode(address: str):
     raise RuntimeError(f"Google Geocoding 失敗: {status} {data.get('error_message','')}")
 
 
-def distance_matrix(coords, timeout=90, batch=10):
+def distance_matrix(coords, timeout=30, batch=10, fast_fail=False):
     """
     輸入 coords=[(lat,lon)...]，index 0 = depot。
     回傳 (matrix_km, duration_sec, source)。失敗拋例外。
     分塊呼叫：Google 單次上限 100 元素(origins×destinations)，
     故每塊 batch×batch 呼叫後拼回完整矩陣。
+
+    timeout: 單一區塊最長等待秒數（預設 30，避免卡死）。
+    fast_fail: 若為 True，遇到 OVER_QUERY_LIMIT / REQUEST_DENIED 立即拋出，
+               不再對剩餘區塊做無謂嘗試（呼叫方會直接降級 OSRM/直線）。
     """
     key = _load_key()
     n = len(coords)
@@ -85,6 +89,10 @@ def distance_matrix(coords, timeout=90, batch=10):
             data = json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode())
             status = data.get("status")
             if status != "OK":
+                # 配額耗盡 / 權限問題：fast_fail 時立即拋出，避免後續區塊空等
+                if fast_fail and status in ("OVER_QUERY_LIMIT", "REQUEST_DENIED"):
+                    raise RuntimeError(
+                        f"Google Distance Matrix 失敗: {status} {data.get('error_message','')}")
                 raise RuntimeError(f"Google Distance Matrix 失敗: {status} {data.get('error_message','')}")
             for i, row in enumerate(data["rows"]):
                 gi = rs + i
