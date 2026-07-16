@@ -132,7 +132,7 @@ def build_html(result, depot, out_path, meta=None):
 </div>
 {route_cards}
 {skip_html}
-<footer>本報表由物流路線規劃 Agent 雛形產出 · 時間含每瓶 20 秒下貨</footer>
+<footer>本報表由物流路線規劃 Agent 雛形產出 · 時間含每瓶 10 秒下貨</footer>
 </div></body></html>"""
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
@@ -240,7 +240,7 @@ def build_html_grouped(result, out_path, meta=None):
 </div>
 {cards}
 {skip_html}
-<footer>本報表由物流路線規劃 Agent 產出 · 下貨時間按每瓶 20 秒計算</footer>
+<footer>本報表由物流路線規劃 Agent 產出 · 下貨時間按每瓶 10 秒計算</footer>
 </div></body></html>"""
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)

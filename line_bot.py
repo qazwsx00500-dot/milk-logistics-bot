@@ -258,6 +258,28 @@ def run_plan(data_path=None, rows=None):
         else:
             lines.append(f"\n📁 報表已產出：{day_dir}")
 
+        # ☁ 若設了 OneDrive 憑證，把報表同步上傳到 OneDrive，
+        #    讓本機「OneDrive 同步桌面」自動出現報表（雲端跑也看得到）。
+        try:
+            import onedrive_sync as ods
+            if ods.upload_report_dir(day_dir, datetime.now().strftime("%Y-%m-%d")):
+                lines.append(f"☁ 報表已同步至 OneDrive（本機桌面會自動出現）。")
+        except Exception as e:
+            print(f"⚠ OneDrive 同步失敗（不影響 LINE 回傳）: {e}")
+
+        # 🔍 產出自動複檢：把 self_check 的終端輸出轉成 LINE 文字附上，
+        #    讓手機端也能看到 ①~⑤ 檢查結果與 ⛔ 警告（本機 CLI 已有，這裡補齊 LINE 路徑）。
+        try:
+            import io as _io, contextlib as _cl
+            _buf = _io.StringIO()
+            with _cl.redirect_stdout(_buf):
+                _ok = L.self_check(result, None)
+            _chk = _buf.getvalue().strip()
+            if _chk:
+                lines.append(f"\n🔍 自動複檢：\n{_chk}")
+        except Exception as e:
+            print(f"⚠ 自動複檢失敗（不影響 LINE 回傳）: {e}")
+
         return "\n".join(lines)
     except Exception as e:
         traceback.print_exc()

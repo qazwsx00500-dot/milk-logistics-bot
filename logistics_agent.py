@@ -2,7 +2,7 @@
 logistics_agent.py — 鮮奶物流「分組路線規劃」Agent
 
 模式：照 Excel 的「車號」分組，每台車獨立排出最順拜訪順序。
-     每台車有各自的出發點(出發點地址欄)。計算每間店下貨時間(瓶數*20秒)
+     每台車有各自的出發點(出發點地址欄)。計算每間店下貨時間(瓶數*10秒)
      與到店預估時間(ETA)。
 
 用法：
@@ -84,7 +84,7 @@ def make_sample(path):
         ["車號", "必填", "同一台車的點填相同車號，如 車01 / 車A。程式照車號分組，每台車獨立排順序"],
         ["店家名稱", "必填", "店家名稱，會顯示在報表與地圖"],
         ["店家地址", "必填", "完整地址(到門牌)，用 Google 精準定位。例: 台中市大雅區101-1號"],
-        ["瓶數", "必填", "鮮奶瓶數。下貨時間=瓶數×20秒，並計入到店預估時間"],
+        ["瓶數", "必填", "鮮奶瓶數。下貨時間=瓶數×10秒，並計入到店預估時間"],
         ["", "", ""],
         ["出發點", "總倉統一", f"所有車都從總倉出發並回到總倉：{DEPOT_ADDR}（已在程式設定，Excel 不需填出發點）"],
         ["用法", "", "填好後執行: python logistics_agent.py --data 路徑/每日配送.xlsx"],
@@ -105,7 +105,9 @@ def build_matrices(vehicles, stops_by_vehicle, use_google, no_google):
     duration_matrix = {}
     source = "haversine"
     if not use_google:
-        return matrix_km, duration_matrix, source
+        # 回 None（不是空 dict）：solve_grouped 的 _Dist 在 matrix is None 時
+        # 才會 fallback 到 haversine 真算；回空 dict 會讓 .get 全取 0 → 0km 假數據。
+        return None, None, source
 
     for v in vehicles:
         stops = stops_by_vehicle.get(v.id, [])
@@ -436,6 +438,110 @@ def _make_summary_like(result):
     return "\n".join(lines)
 
 
+def self_check(result, args=None):
+    """結果產出後自動複檢（每次跑完都呼叫，印在終端不污染報表）。
+    檢查三個已知坑：下貨秒數一致性 / 里程非 0 / 回倉標註自洽。"""
+    from data_loader import SERVICE_SEC_PER_BOTTLE
+    print("\n🔍 產出自動複檢：")
+    issues = []
+
+    # 1) 下貨秒數一致性：footer 文字若硬寫秒數，必須與 SERVICE_SEC_PER_BOTTLE 對齊
+    #    （report.py footer 寫『每瓶 N 秒』，改 SERVICE_SEC_PER_BOTTLE 時要同步）
+    try:
+        from report import __file__ as _rp
+        rsrc = open(_rp, encoding="utf-8").read()
+        import re
+        m = re.search(r"每瓶\s*(\d+)\s*秒", rsrc)
+        if m and int(m.group(1)) != int(SERVICE_SEC_PER_BOTTLE):
+            issues.append(f"⚠ 報表 footer 寫『每瓶 {m.group(1)} 秒』但 SERVICE_SEC_PER_BOTTLE={int(SERVICE_SEC_PER_BOTTLE)}，兩者不一致！改 data_loader.py 秒數時要同步 report.py footer。")
+        else:
+            print(f"   ① 下貨秒數一致：{int(SERVICE_SEC_PER_BOTTLE)} 秒/瓶（footer 對齊）")
+    except Exception as e:
+        print(f"   ① 下貨秒數檢查跳過（{e}）")
+
+    # 2) 里程非 0：每車 distance_km 應 > 0（曾踩坑：矩陣 key 漏 veh_id → 0km 假準時）
+    zero_km = [rt["vehicle"].id for rt in result.routes if rt.get("distance_km", 0) <= 0]
+    if zero_km:
+        issues.append(f"⚠ 以下車里程為 0km（疑距離矩陣沒吃到真實道路）：{', '.join(zero_km)}")
+    else:
+        parts = [f"{rt['vehicle'].id}={rt['distance_km']:.1f}km" for rt in result.routes]
+        print(f"   ② 各車里程非零：{', '.join(parts)}")
+
+    # 3) 回倉標註自洽：on_time 布林應 == (end_hour <= TARGET_RETURN_HOUR)
+    bad = []
+    for rt in result.routes:
+        calc = rt.get("end_hour", 0) <= TARGET_RETURN_HOUR
+        if rt.get("on_time") != calc:
+            bad.append(rt["vehicle"].id)
+    if bad:
+        issues.append(f"⚠ 回倉準時標註與計算不符：{', '.join(bad)}")
+    else:
+        print(f"   ③ 回倉標註自洽：準時窗 {_hhmm(TARGET_RETURN_HOUR)}（目標回倉）")
+
+    # 4) 回倉時間：基於報表自身 etas 做健全性檢查（不引入第二種距離度量，
+    #    避免 haversine 直線 vs 真實道路的系統偏差誤報）
+    #    - etas 須單調遞增（下一站到達 >= 本站離開）
+    #    - end_hour 須 >= 最後一站離開（回倉必晚於最後離開）
+    #    - 回程間隔須在合理範圍 (0 < gap < 12h)，抓 end_hour 被硬設的異常
+    back_warn = []
+    for rt in result.routes:
+        v = rt["vehicle"]; etas = rt.get("etas", [])
+        if not etas:
+            continue
+        mono = all(etas[i + 1][0] >= etas[i][1] for i in range(len(etas) - 1))
+        last_leave = etas[-1][1]
+        end = rt.get("end_hour", 0)
+        gap = end - last_leave
+        if not mono:
+            back_warn.append(f"{v.id}(ETA 非單調遞增)")
+        elif not (0 < gap < 12):
+            back_warn.append(f"{v.id}(回程間隔 {gap*60:.0f}分不合理)")
+        else:
+            tag = "準時" if end <= TARGET_RETURN_HOUR else "超過17:30"
+            print(f"   ④ 回倉時間核對：{v.id} 預計 {_hhmm(end)} 回倉（{tag}）；ETA 鏈單調 ✅")
+    if back_warn:
+        issues.append("⚠ 回倉時間異常：" + "; ".join(back_warn))
+
+    # 5) 路線最佳化：用 multi-restart 2-opt（多隨機種子取最小）獨立重優化，
+    #    跟 solve_grouped 產出的現有順序比。若還能降 >5% 行車 → 路線未充分最佳化。
+    #    （單次 2-opt 太弱、連明顯繞遠都解不開，故用 multi-restart 做有意義的交叉驗證）
+    try:
+        import random
+        from route_planner import Stop as _Stop, _Dist as _DistR, _route_duration_sec, _two_opt  # noqa
+        opt_warn = []
+        for rt in result.routes:
+            v = rt["vehicle"]; stops = rt["stops"]
+            if len(stops) < 4:
+                continue
+            nodes = [_Stop("START", v.start_addr or "起點", v.start_lat, v.start_lon)] + list(stops)
+            dist = _DistR(nodes)
+            n = len(nodes)
+            ordered = list(range(1, n))  # rt["stops"] 已是規劃後順序
+            cur_sec = _route_duration_sec(dist, 0, ordered)
+            # multi-restart：8 個隨機種子各跑 2-opt，取最小行車秒
+            best_sec = cur_sec
+            for seed in range(8):
+                rnd = list(range(1, n))
+                random.Random(seed).shuffle(rnd)
+                r = _two_opt(dist, 0, rnd)
+                best_sec = min(best_sec, _route_duration_sec(dist, 0, r))
+            if best_sec < cur_sec * 0.95:  # 還能優化 >5%
+                opt_warn.append(f"{v.id}(現 {cur_sec/60:.0f}分→可降 {best_sec/60:.0f}分)")
+        if opt_warn:
+            issues.append("⚠ 路線可能未充分最佳化（multi-restart 仍可降 >5% 行車）：" + "; ".join(opt_warn))
+        else:
+            print("   ⑤ 路線最佳化：各車順序已接近最優（multi-restart 交叉驗證）")
+    except Exception as e:
+        print(f"   ⑤ 路線最佳化檢查跳過（{e}）")
+
+    if issues:
+        print("\n".join("   " + i for i in issues))
+        print("   ⛔ 以上問題請先確認再交付報表。")
+    else:
+        print("   ✅ 複檢通過，無異常。")
+    return len(issues) == 0
+
+
 def main():
     ap = argparse.ArgumentParser(description="鮮奶物流分組路線規劃 Agent")
     ap.add_argument("--data", help="每日配送資料 (xlsx/csv)")
@@ -503,6 +609,7 @@ def main():
         print()
     if skipped:
         print("跳過：", "; ".join(f"{n}({r})" for n, r in skipped))
+    self_check(result, args)
 
     # 依執行日期分資料夾：REPORT_DIR/YYYY-MM-DD
     from datetime import datetime
