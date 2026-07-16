@@ -232,9 +232,13 @@ def plan(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0):
     return result, skipped
 
 
-def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0, max_vehicles=3):
+def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0,
+                      max_vehicles=3, force_vehicles=None):
     """無車號時的單輪自動分車：全站只打「一次」真實距離矩陣，
-    拆群(1→3台)時直接從同一次矩陣切出子矩陣複用，避免重複打 Google/OSRM。"""
+    拆群(1→3台)時直接從同一次矩陣切出子矩陣複用，避免重複打 Google/OSRM。
+    force_vehicles: 指定車數(如 2) → 強制分剛好 N 台，且忽略 17:30 時間窗
+                    （只求各車最快回倉、最短路線）。None=由 Agent 自動決定。
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     if not fuel_cost_per_km:
         fuel_cost_per_km = _load_fuel_cost()
@@ -325,12 +329,26 @@ def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per
 
     # ---- 依時間窗決定分幾群（均衡分車：k-means 初始 + 負載均衡） ----
     import auto_router
+    # 先準備 (i,j) 直接索引矩陣（0=倉, 1..n=站），force 分支也要用
+    m_ij = d_ij = None
     if matrix_km_full is not None:
-        # balanced_groups 需要 (i,j) 直接索引的矩陣（0=倉, 1..n=站），
-        # 這裡從 (FULL,i,j) 轉成 (i,j)
         n = len(coords)
         m_ij = {(i, j): matrix_km_full[(FULL, i, j)] for i in range(n) for j in range(n)}
         d_ij = {(i, j): duration_matrix_full[(FULL, i, j)] for i in range(n) for j in range(n)}
+    # 指定車數模式：強制剛好 N 台，且忽略 17:30 時間窗（只求最快回倉/最短路線）
+    if force_vehicles:
+        fk = max(1, min(int(force_vehicles), max_vehicles, len(all_stops)))
+        target = 99.0   # 極大值 → 不算時間窗，純追求最短路線/最快回倉
+        if matrix_km_full is not None:
+            groups = auto_router.balanced_groups(
+                all_stops, DEPOT, start_hour, target, max_vehicles=fk,
+                matrix=m_ij, duration=d_ij, force_k=fk)
+        else:
+            groups = auto_router.balanced_groups(
+                all_stops, DEPOT, start_hour, target, max_vehicles=fk, force_k=fk)
+    elif matrix_km_full is not None:
+        # balanced_groups 需要 (i,j) 直接索引的矩陣（0=倉, 1..n=站），
+        # 這裡從 (FULL,i,j) 轉成 (i,j)
         groups = auto_router.balanced_groups(
             all_stops, DEPOT, start_hour, TARGET_RETURN_HOUR, max_vehicles=max_vehicles,
             matrix=m_ij, duration=d_ij)

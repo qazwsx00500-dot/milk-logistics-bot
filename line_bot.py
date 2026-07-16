@@ -296,12 +296,121 @@ def handle_file(event, file_msg) -> str:
         traceback.print_exc()
         return f"⚠ 轉換 Excel 失敗：{type(e).__name__}: {str(e)[:100]}"
 
-    # 3) 自動規劃（rows 傳入 → 無車號時 Agent 自動分車）
-    summary = (f"📥 已收到「{fname}」\n"
-               f"✅ 已自動轉成標準每日配送表並存檔：\n"
-               f"   {os.path.basename(out_path)}\n"
-               f"   （{len(rows)} 筆店家資料，{len(skipped)} 筆跳過）\n\n")
-    return summary + run_plan(rows=rows)
+    # 3) 不直接跑規劃，先問使用者要幾台車（Quick Reply 選單）
+    pending = {
+        "rows": rows,
+        "skipped_n": len(skipped),
+        "fname": fname,
+        "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    PENDING_FILES[user_id_key(event)] = pending
+    from linebot.v3.messaging import QuickReply, QuickReplyItem, MessageAction
+    qr = QuickReply(items=[
+        QuickReplyItem(action=MessageAction(label="🤖 自動安排", text="自動安排")),
+        QuickReplyItem(action=MessageAction(label="1 台", text="1台")),
+        QuickReplyItem(action=MessageAction(label="2 台", text="2台")),
+        QuickReplyItem(action=MessageAction(label="3 台", text="3台")),
+    ])
+    msg = (f"📥 已收到「{fname}」\n"
+           f"✅ 已自動轉成標準每日配送表（{len(rows)} 筆店家，{len(skipped)} 筆跳過）\n\n"
+           f"🔢 請選擇要安排幾台車：\n"
+           f"  • 🤖 自動安排 → 由我依時間窗(17:30回倉)決定 1~3 台\n"
+           f"  • 指定台數 → 只求最快回倉，不限制 17:30")
+    return (msg, qr)
+
+
+def user_id_key(event):
+    return getattr(getattr(event, "source", None), "user_id", None) or "default"
+
+
+def run_plan_choice(user_id, choice_text, pending):
+    """根據使用者選擇跑規劃。choice_text: '自動安排' / '1台' / '2台' / '3台'。"""
+    import logistics_agent as L
+    import report as report_mod
+    import excel_normalizer as en
+    fuel_cost = L._load_fuel_cost()
+    start_hour = L.DEFAULT_START_HOUR
+    rows = pending["rows"]
+
+    # 寫成臨時標準檔
+    import openpyxl as _ox
+    from openpyxl import Workbook as _WB
+    tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
+    wb = _WB(); ws = wb.active; ws.title = "每日配送"
+    ws.append(["車號", "店家名稱", "店家地址", "瓶數"])
+    for veh, n, a, q in rows:
+        ws.append([veh, n, a, q])
+    wb.save(tmp)
+
+    had_no_vehicle = all(r[0] == "" for r in rows)
+
+    # 判斷車數模式
+    force_v = None
+    if choice_text in ("1台", "2台", "3台"):
+        force_v = int(choice_text[0])
+    # '自動安排' 或 其他 → 自動
+
+    if force_v is not None:
+        result, skipped = L.plan_auto_assign(
+            start_hour, tmp, True, False, fuel_cost_per_km=fuel_cost,
+            force_vehicles=force_v)
+        mode_note = f"你指定 {force_v} 台（只求最快回倉，不限制17:30）"
+    else:
+        result, skipped = L.plan_auto_assign(
+            start_hour, tmp, True, False, fuel_cost_per_km=fuel_cost)
+        mode_note = "由 Agent 依『09:30出車/17:30回倉』自動安排"
+
+    if result is None:
+        return "⚠ 排程失敗：沒有可規劃的車輛/店家。"
+    return _format_result(result, skipped, fuel_cost, mode_note, PUBLIC_URL)
+
+
+CHOICE_WORDS = {"自動安排", "1台", "2台", "3台"}
+
+
+def _format_result(result, skipped, fuel_cost, mode_note, public_url):
+    """把 PlanResult 組成 LINE 文字摘要（含報表連結）。"""
+    import logistics_agent as L
+    import report as report_mod
+    # 產報表到 日期子資料夾
+    from datetime import datetime
+    day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
+    os.makedirs(day_dir, exist_ok=True)
+    report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
+                                  meta={"start_hour": L.DEFAULT_START_HOUR})
+    report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
+    L.build_map(result, day_dir, True)
+
+    lines = [f"📦 路線規劃完成（{result.distance_source}）",
+             f"🚚 {mode_note}",
+             f"車數 {len(result.routes)} 台 ｜ 總實際里程 {result.total_distance_km:.0f} km ｜ 總瓶數 {int(result.total_load)}"]
+    if result.fuel_cost_per_km > 0:
+        lines.append(f"⛽ 油資單價 {result.fuel_cost_per_km:.1f} 元/km ｜ 預估總油資 {result.total_fuel_cost:.0f} 元")
+    for rt in result.routes:
+        v = rt["vehicle"]
+        ret = _hhmm(rt["end_hour"])
+        if rt.get("on_time"):
+            tag = "✅準時回倉"
+        else:
+            tag = f"⚠回倉 {ret}（指定台數模式不限制17:30）" if "指定" in mode_note else f"⚠超過17:30({ret})"
+        fuel_txt = f" 油資{rt.get('fuel_cost',0):.0f}元" if result.fuel_cost_per_km > 0 else ""
+        lines.append(f"\n【{v.id}】{len(rt['stops'])}站 {rt['distance_km']:.0f}km {ret}回 {tag}{fuel_txt}")
+        for si, s in enumerate(rt["stops"][:5]):
+            a, lv = rt["etas"][si]
+            lines.append(f"  {si+1}. {s.name} 到{_hhmm(a)} 離{_hhmm(lv)}")
+        if len(rt["stops"]) > 5:
+            lines.append(f"  …其餘 {len(rt['stops'])-5} 站請看報表")
+    if skipped:
+        lines.append(f"\n⚠ 跳過 {len(skipped)} 筆：")
+        lines.append("  " + "; ".join(f"{n}({r})" for n, r in skipped[:10]))
+
+    if public_url:
+        lines.append(f"\n📄 報表：{public_url}/report")
+        lines.append(f"📊 CSV ：{public_url}/report.csv")
+        lines.append(f"🗺️ 地圖：{public_url}/route_map")
+    else:
+        lines.append(f"\n📁 報表已產出：{day_dir}")
+    return "\n".join(lines)
 
 
 def _hhmm(h):
@@ -318,17 +427,23 @@ import threading
 # 最近一次處理結果（Push 失敗時的備援，可從 /last_result 網頁查看）
 LAST_RESULT = {"ts": None, "text": "(尚無結果)", "pushed": None, "error": None}
 
-def _push_to(user_id, text):
+# 待使用者選車數的暫存（user_id → {rows, fname, ...}）
+PENDING_FILES = {}
+
+def _push_to(user_id, text, quick_reply=None):
     """用 Push 推結果給使用者（繞過 reply_token 1 秒過期限制）。"""
     global LAST_RESULT
     try:
         from linebot.v3.messaging.models import PushMessageRequest
         if not user_id:
             raise ValueError("user_id 為空，無法 Push（可能事件結構不含 source.user_id）")
+        msgs = [TextMessage(text=text[:1900])]
+        if quick_reply is not None:
+            msgs[0].quick_reply = quick_reply
         messaging_api.push_message(
             PushMessageRequest(
                 to=user_id,
-                messages=[TextMessage(text=text[:1900])],
+                messages=msgs,
             )
         )
         LAST_RESULT["pushed"] = True
@@ -343,17 +458,28 @@ def _process_and_push(user_id, kind, payload):
     import datetime as _dt
     try:
         if kind == "text":
-            result = handle_text(payload)
+            text = payload
+            # 車數選擇互動：傳檔後使用者回「自動安排/1台/2台/3台」且有暫存檔
+            if text.strip() in CHOICE_WORDS and user_id in PENDING_FILES:
+                pending = PENDING_FILES.pop(user_id, None)
+                result = run_plan_choice(user_id, text.strip(), pending)
+            else:
+                result = handle_text(text)
         elif kind == "file":
             result = handle_file(payload["event"], payload["file_msg"])
         else:
             result = "⚠ 不支援的訊息類型。"
+        # 支援 (text, quick_reply) 回傳
+        qr = None
+        if isinstance(result, tuple):
+            result, qr = result
     except Exception as e:
         traceback.print_exc()
         result = f"⚠ 處理時發生錯誤：{type(e).__name__}: {str(e)[:120]}"
+        qr = None
     LAST_RESULT["ts"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     LAST_RESULT["text"] = result
-    _push_to(user_id, result)
+    _push_to(user_id, result, quick_reply=qr)
 
 @app.route("/callback", methods=["POST", "GET"])
 def callback():

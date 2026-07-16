@@ -186,48 +186,117 @@ def _rebalance(groups, stops, depot, start_hour, target_return,
     return groups
 
 
+def _rebalance_balanced(groups, stops, depot, start_hour,
+                        matrix=None, duration=None, est_speed_kmh=30.0, max_iter=300):
+    """均衡模式 rebalance：忽略時間窗，純把站點從『工作量最大群』搬到『最小群』，
+    直到各群工作量（回倉時刻）方差最小。適用 force_k 指定車數模式。
+    用粗估(haversine)算工作量，速度快；精確矩陣留給最終 solve。"""
+    def end_of(g):
+        if not g:
+            return start_hour
+        return estimate_route_end_hour([stops[i] for i in g], depot, start_hour, est_speed_kmh)
+
+    for _ in range(max_iter):
+        ends = [end_of(g) for g in groups]
+        mi = min(range(len(groups)), key=lambda i: ends[i])
+        ma = max(range(len(groups)), key=lambda i: ends[i])
+        if ends[ma] - ends[mi] < 0.05:   # 已均衡（差距 <3分）
+            break
+        gmax = groups[ma]
+        if not gmax:
+            break
+        gmin = groups[mi]
+        cd = _centroid(gmin, stops)
+        best = None
+        for si in list(gmax):
+            new_end = end_of(gmin + [si])
+            new_diff = abs(new_end - ends[ma])  # ma 工作量減少量
+            dist = _haversine(stops[si].lat, stops[si].lon, cd[0], cd[1])
+            # 以「地理距離」為主導（保持路線聚集、總里程最短），
+            # 工作量趨近為輔助（達成均衡）。避免跨區硬搬導致路線繞遠。
+            score = new_diff * 0.3 - dist
+            if best is None or score > best[0]:
+                best = (score, si)
+        if best is not None and best[1] in groups[ma]:
+            si = best[1]
+            groups[ma].remove(si)
+            groups[mi].append(si)
+        else:
+            break
+    return groups
+
+
 def balanced_groups(stops, depot, start_hour=9.5, target_return=17.5, max_vehicles=3,
-                    matrix=None, duration=None, est_speed_kmh=30.0):
+                    matrix=None, duration=None, est_speed_kmh=30.0, force_k=None):
     """時間窗驅動的均衡分車：儘量讓每群 ≤ 目標回倉時間。
 
     先試 k=2、再 k=3（最多 max_vehicles 台）。每個 k 跑多個 seed 的 k-means，
     各自 _rebalance，選「所有群準時 且 最忙群最早回倉」的最佳解；
     若都無法全準時，選「超時群數最少、超時幅度最小」的解。
     回傳 list of list（全域 stop 索引），最少車數優先。
+    force_k: 若指定（如 2）→ 強制分剛好 k 台，不走 k=2→3 自動判斷，
+             且 caller 應把 target_return 設極大值以「忽略時間窗、只求最短路線」。
     """
     if not stops:
         return []
-    # 1 台就準時 → 直接一台
-    if estimate_route_end_hour(stops, depot, start_hour, est_speed_kmh) <= target_return:
+    # 1 台就準時 → 直接一台（但 force_k 指定台數時不短路，強制照指定台數分）
+    if force_k is None and (
+            estimate_route_end_hour(stops, depot, start_hour, est_speed_kmh) <= target_return
+            or max_vehicles <= 1):
         return [list(range(len(stops)))]
-    if max_vehicles <= 1:
-        return [list(range(len(stops)))]
+    if force_k is not None:
+        force_k = max(1, min(int(force_k), max_vehicles, len(stops)))
+
+    def _workload(groups):
+        """各群工作量(回倉時刻)列表，用真實矩陣或粗估。"""
+        if matrix is not None:
+            return [group_end_hour_real(g, depot, start_hour, matrix, duration, stops, est_speed_kmh)
+                    for g in groups]
+        return [estimate_route_end_hour([stops[i] for i in g], depot, start_hour, est_speed_kmh)
+                for g in groups]
 
     def _score(groups):
-        """越低越好。優先：全準時 > 超時群少 > 超時幅度小 > 最忙群早回倉。"""
-        if matrix is not None:
-            ends = [group_end_hour_real(g, depot, start_hour, matrix, duration, stops, est_speed_kmh)
-                    for g in groups]
-        else:
-            ends = [estimate_route_end_hour([stops[i] for i in g], depot, start_hour, est_speed_kmh)
-                    for g in groups]
+        ends = _workload(groups)
+        if force_k is not None:
+            # 指定台數模式：以「各群工作量方差最小」為目標（均衡），不卡時間窗
+            mean = sum(ends) / len(ends)
+            var = sum((e - mean) ** 2 for e in ends) / len(ends)
+            max_end = max(ends)
+            return (round(var, 4), round(max_end, 3))
         over = sum(1 for e in ends if e > target_return)
         over_amt = sum(e - target_return for e in ends if e > target_return)
         max_end = max(ends)
-        # 全準時時 max_end 越小越好；有超時時 over/over_amt 主導
         return (over, round(over_amt, 3), round(max_end, 3))
 
     def _try_k(k):
         best_g = None
         best_s = None
+        # force 模式：用均衡 rebalance（ignore 時間窗，純求各群工作量方差最小）
+        if force_k is not None and force_k == k:
+            for seed in range(8):
+                groups = kmeans_stops(stops, k, seed=seed)
+                groups = _rebalance_balanced(groups, stops, depot, start_hour,
+                                             matrix=matrix, duration=duration,
+                                             est_speed_kmh=est_speed_kmh)
+                s = _score(groups)
+                if best_s is None or s < best_s:
+                    best_s = s; best_g = groups
+            return best_g, best_s
+        # 一般模式：用時間窗 rebalance
+        tgt = target_return
         for seed in range(8):  # 多 seed 避免壞初始(如 2/56/5)
             groups = kmeans_stops(stops, k, seed=seed)
-            groups = _rebalance(groups, stops, depot, start_hour, target_return,
+            groups = _rebalance(groups, stops, depot, start_hour, tgt,
                                 matrix=matrix, duration=duration, est_speed_kmh=est_speed_kmh)
             s = _score(groups)
             if best_s is None or s < best_s:
                 best_s = s; best_g = groups
         return best_g, best_s
+
+    if force_k is not None:
+        # 指定台數模式：直接回傳剛好 force_k 台（均衡分配，忽略17:30時間窗）
+        g, s = _try_k(force_k)
+        return g
 
     for k in range(2, max_vehicles + 1):
         g, s = _try_k(k)
