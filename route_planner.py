@@ -24,7 +24,7 @@ class Stop:
     lat: float
     lon: float
     demand: float = 0.0          # 瓶數
-    service_time: float = 0.0    # 下貨秒數 (= 瓶數 * 20)
+    service_time: float = 0.0    # 下貨秒數 (= 瓶數 * 15)
     address: str = ""
     vehicle: str = ""            # 所屬車號
 
