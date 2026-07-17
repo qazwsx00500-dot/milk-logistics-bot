@@ -63,12 +63,28 @@ def geocode(address: str):
     if address in _cache:
         return _cache[address]
 
-    # 1) 優先 Google（門牌級）
+    # 0) 持久化快取（跨執行保存）：命中就完全不呼叫 Google（$0）。
+    #    這是「除非是沒用過的新地址才呼叫 Google」的核心。
+    try:
+        import geo_cache
+        cached = geo_cache.get_geo(address)
+        if cached:
+            _cache[address] = cached
+            return cached
+    except Exception:
+        pass
+
+    # 1) 優先 Google（門牌級）—— 只有快取沒有的新地址才會走到這
     try:
         from google_maps import geocode as g_geocode
         res = g_geocode(address)
         if res:
             _cache[address] = res
+            try:
+                import geo_cache
+                geo_cache.put_geo(address, res)   # 存檔，下次不再花錢
+            except Exception:
+                pass
             return res
     except Exception:
         pass  # 降級 OSM

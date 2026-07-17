@@ -76,6 +76,32 @@ def distance_matrix(coords, timeout=30, batch=10, fast_fail=False):
     matrix_km = [[0.0] * n for _ in range(n)]
     duration_sec = [[0.0] * n for _ in range(n)]
 
+    # ---- 持久化快取：先看有沒有已存的兩點結果 ----
+    # 全部命中 → 完全不呼叫 Google（$0）。只要有任何一對沒存過，才打 Google。
+    # 符合「除非是沒用過的地址（新路線）才呼叫 Google」的需求。
+    try:
+        import geo_cache
+        _use_cache = True
+    except Exception:
+        geo_cache = None
+        _use_cache = False
+
+    if _use_cache:
+        all_hit = True
+        for i in range(n):
+            for j in range(n):
+                if i == j:
+                    continue
+                pr = geo_cache.get_pair(coords[i][0], coords[i][1],
+                                        coords[j][0], coords[j][1])
+                if pr is None:
+                    all_hit = False
+                else:
+                    matrix_km[i][j] = pr[0]
+                    duration_sec[i][j] = pr[1]
+        if all_hit:
+            return matrix_km, duration_sec, "google-cache"
+
     for rs in range(0, n, batch):
         re = min(rs + batch, n)
         for cs in range(0, n, batch):
@@ -101,4 +127,12 @@ def distance_matrix(coords, timeout=30, batch=10, fast_fail=False):
                     if el["status"] == "OK":
                         matrix_km[gi][gj] = el["distance"]["value"] / 1000.0
                         duration_sec[gi][gj] = el["duration"]["value"]
+                        # 存進持久化快取：下次同一對就不必再花錢
+                        if _use_cache and gi != gj:
+                            geo_cache.put_pair(
+                                coords[gi][0], coords[gi][1],
+                                coords[gj][0], coords[gj][1],
+                                matrix_km[gi][gj], duration_sec[gi][gj])
+    if _use_cache:
+        geo_cache.flush()   # 一次寫回磁碟
     return matrix_km, duration_sec, "google"

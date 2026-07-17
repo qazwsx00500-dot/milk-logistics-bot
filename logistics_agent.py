@@ -238,8 +238,14 @@ def plan(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0):
     matrix_km, duration_matrix, source = build_matrices(
         vehicles, stops_by_vehicle, use_google, no_google)
     src_map = {"haversine": "直線估算", "google": "Google Maps",
-               "osrm": "OSRM", "fallback": "直線估算(降級)"}
+               "google-cache": "本機快取(零費用)", "osrm": "OSRM",
+               "fallback": "直線估算(降級)"}
     print(f"   距離來源：{src_map.get(source, source)}")
+    try:
+        import geo_cache
+        print("   " + geo_cache.stats_line())
+    except Exception:
+        pass
 
     result = solve_grouped(
         vehicles, stops_by_vehicle,
@@ -347,8 +353,14 @@ def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per
             duration_matrix_full = None
 
     src_map = {"haversine": "直線估算", "google": "Google Maps",
+               "google-cache": "本機快取(零費用)",
                "osrm": "OSRM", "fallback": "直線估算(降級)"}
     print(f"   距離來源：{src_map.get(source, source)}（全站單次矩陣）")
+    try:
+        import geo_cache as _gc
+        print("   " + _gc.stats_line())
+    except Exception:
+        pass
 
     # ---- 依時間窗決定分幾群（均衡分車：k-means 初始 + 負載均衡） ----
     import auto_router
