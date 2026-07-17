@@ -108,6 +108,22 @@ def view_report_csv():
     return Response("尚未產生報表。", mimetype="text/plain; charset=utf-8")
 
 
+@app.route("/report/<vid>", methods=["GET"])
+def view_report_vehicle(vid):
+    """單一車輛的獨立報表（含 PNG 下載按鈕，可分別轉給司機）。"""
+    import logistics_agent as L
+    import report as report_mod
+    day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
+    # vid 可能是原車號或已 safe 化，兩種都試
+    safe = report_mod._safe_veh(vid)
+    for name in ("route_report_" + safe + ".html", "route_report_" + vid + ".html"):
+        fp = os.path.join(day_dir, name)
+        if os.path.exists(fp):
+            return send_file(fp)
+    return Response("找不到該車報表。請先在 LINE 傳 Excel 或『跑』觸發規劃。",
+                    mimetype="text/plain; charset=utf-8")
+
+
 # ---- 派車單檢視路由（每台車一份，給司機/內勤） ----
 def _today_dispatch(which):
     """which: 'html' | 'csv' → 回傳今天派車單檔路徑或 None。"""
@@ -293,6 +309,7 @@ def run_plan(data_path=None, rows=None):
         report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                       meta={"start_hour": start_hour})
         report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
+        per_veh = report_mod.build_html_per_vehicle(result, day_dir, meta={"start_hour": start_hour})
         L.build_map(result, day_dir, use_google)
         # 路線圖 PNG 由本機直跑時產生（本機有 Edge/Chrome）；雲端(Render)無瀏覽器，
         # 不嘗試截圖。使用者於本機執行 sync_from_render.py 會抓本機已產出的 PNG。
@@ -331,9 +348,13 @@ def run_plan(data_path=None, rows=None):
 
         # 附公網報表連結
         if PUBLIC_URL:
-            lines.append(f"\n📄 報表：{PUBLIC_URL}/report")
+            lines.append(f"\n📄 總表：{PUBLIC_URL}/report")
             lines.append(f"📊 CSV ：{PUBLIC_URL}/report.csv")
-            lines.append(f"🗺️ 地圖：{PUBLIC_URL}/route_map")
+            lines.append(f"🗺️ 地圖：{PUBLIC_URL}/route_map（可下載PNG）")
+            lines.append("🚚 各車獨立報表（可分別轉給司機，可下載PNG）：")
+            for rt in result.routes:
+                vid = rt["vehicle"].id
+                lines.append(f"  ・{vid}：{PUBLIC_URL}/report/{report_mod._safe_veh(vid)}")
         else:
             lines.append(f"\n📁 報表已產出：{day_dir}")
 
@@ -483,6 +504,7 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                   meta={"start_hour": L.DEFAULT_START_HOUR})
     report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
+    per_veh = report_mod.build_html_per_vehicle(result, day_dir, meta={"start_hour": L.DEFAULT_START_HOUR})
     L.build_map(result, day_dir, True)
     # 路線圖 PNG 由本機直跑時產生（本機有 Edge/Chrome）；雲端(Render)無瀏覽器，不嘗試截圖。
     map_png = None
@@ -521,9 +543,13 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
         lines.append("  " + "; ".join(f"{n}({r})" for n, r in skipped[:10]))
 
     if public_url:
-        lines.append(f"\n📄 報表：{public_url}/report")
+        lines.append(f"\n📄 總表：{public_url}/report")
         lines.append(f"📊 CSV ：{public_url}/report.csv")
-        lines.append(f"🗺️ 地圖：{public_url}/route_map")
+        lines.append(f"🗺️ 地圖：{public_url}/route_map（可下載PNG）")
+        lines.append("🚚 各車獨立報表（可分別轉給司機，可下載PNG）：")
+        for rt in result.routes:
+            vid = rt["vehicle"].id
+            lines.append(f"  ・{vid}：{public_url}/report/{report_mod._safe_veh(vid)}")
     else:
         lines.append(f"\n📁 報表已產出：{day_dir}")
     return "\n".join(lines)

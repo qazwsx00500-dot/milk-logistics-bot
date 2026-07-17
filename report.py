@@ -9,6 +9,27 @@ report.py — 路線報表產出
 """
 
 import csv
+
+# ---- PNG 下載按鈕（瀏覽器端 html2canvas 截圖，雲端本機皆可用） ----
+_PNG_BTN = ('<button class="dlbtn" style="display:inline-block;background:#0b6b3a;color:#fff;'
+            'border:none;border-radius:8px;padding:10px 16px;font-size:14px;font-weight:700;'
+            'cursor:pointer;margin:4px 0 12px;box-shadow:0 1px 4px rgba(0,0,0,.2)" '
+            'onclick="dlReportPNG()">\U0001f4e5 \u4e0b\u8f09\u5831\u8868 PNG</button>')
+
+_PNG_SCRIPT = ('<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>'
+  '<script>'
+  'function dlReportPNG(){'
+  '  var btn=document.querySelector(".dlbtn"); var old=btn.textContent;'
+  '  btn.textContent="\u7522\u751f\u4e2d\u2026"; btn.disabled=true;'
+  '  html2canvas(document.querySelector(".wrap"),{scale:2,backgroundColor:"#f4f5f7"}).then(function(c){'
+  '    var a=document.createElement("a");'
+  '    a.download="\u914d\u9001\u5831\u8868_"+new Date().toISOString().slice(0,10)+".png";'
+  '    a.href=c.toDataURL("image/png"); a.click();'
+  '    btn.textContent=old; btn.disabled=false;'
+  '  }).catch(function(e){alert("\u7522\u751f PNG \u5931\u6557:"+e);btn.textContent=old;btn.disabled=false;});'
+  '}'
+  '</script>')
+
 import json
 import os
 from datetime import datetime, timedelta
@@ -231,6 +252,7 @@ def build_html_grouped(result, out_path, meta=None):
 <body><div class="wrap">
 <header><h1>🥛 鮮奶配送路線報表</h1>
 <div class="sub">出發 {_hhmm(start)} ｜ 距離來源 {src} ｜ 生成 {gen}</div></header>
+{_PNG_BTN}
 <div class="summary">
   <div class="kpi"><div class="v">{len(result.routes)}</div><div class="l">出車數</div></div>
   <div class="kpi"><div class="v">{sum(len(r['stops']) for r in result.routes)}</div><div class="l">配送店數</div></div>
@@ -241,10 +263,73 @@ def build_html_grouped(result, out_path, meta=None):
 {cards}
 {skip_html}
 <footer>本報表由物流路線規劃 Agent 產出 · 下貨時間按每瓶 10 秒計算</footer>
-</div></body></html>"""
+</div>{_PNG_SCRIPT}</body></html>"""
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(html)
     return out_path
+
+
+def _safe_veh(vid):
+    return "".join(c if (c.isalnum() or c in "-_") else "_" for c in str(vid))
+
+
+def build_html_per_vehicle(result, day_dir, meta=None):
+    """每台車一個獨立 HTML(含 PNG 下載按鈕)，給不同司機分別拿。
+    回傳 [(vehicle_id, filepath), ...]。"""
+    meta = meta or {}
+    start = meta.get("start_hour", 8.0)
+    gen = datetime.now().strftime("%Y-%m-%d %H:%M")
+    out = []
+    css = ("<style>body{font-family:-apple-system,'Microsoft JhengHei',sans-serif;margin:0;"
+           "background:#f4f5f7;color:#222;}.wrap{max-width:720px;margin:0 auto;padding:18px;}"
+           "header{background:#0b6b3a;color:#fff;padding:16px 18px;border-radius:10px;}"
+           "header h1{margin:0;font-size:20px;}header .sub{opacity:.9;font-size:13px;margin-top:4px;}"
+           ".card{background:#fff;border-radius:10px;padding:12px 14px;margin:12px 0;"
+           "box-shadow:0 1px 3px rgba(0,0,0,.08);}.card-meta{font-size:12px;color:#555;margin-bottom:8px;}"
+           "table{width:100%;border-collapse:collapse;font-size:14px;}"
+           "th,td{text-align:left;padding:7px 6px;border-bottom:1px solid #eee;}"
+           "th{color:#666;font-weight:600;}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}"
+           ".addr{color:#888;font-size:11px;}.ok{color:#0b8a43;font-weight:700;}"
+           ".warn{color:#c62828;font-weight:700;}footer{text-align:center;color:#999;font-size:12px;margin:16px 0;}"
+           "@media print{.dlbtn{display:none;}}</style>")
+    for rt in result.routes:
+        v = rt["vehicle"]
+        ret = _hhmm(rt["end_hour"])
+        on_time = rt.get("on_time", True)
+        ret_tag = ('<span class="ok">\u2705 \u6e96\u6642\u56de\u5009</span>' if on_time
+                   else '<span class="warn">\u26a0 \u8d85\u904e 17:30 (' + ret + ')</span>')
+        fuel_txt = ""
+        if result.fuel_cost_per_km > 0:
+            fuel_txt = " \uff5c \u6cb9\u8cc7 " + ("%.0f" % rt.get("fuel_cost", 0)) + " \u5143"
+        rows = ""
+        for si, sp in enumerate(rt["stops"]):
+            a, lv = rt["etas"][si]
+            qty = int(sp.demand) if sp.demand == int(sp.demand) else sp.demand
+            rows += ("<tr><td>" + str(si + 1) + "</td><td><b>" + str(sp.name) +
+                     "</b><br><span class='addr'>" + str(sp.address) + "</span></td>"
+                     "<td class='num'>" + str(qty) + "</td><td class='num'>" + _hhmm(a) +
+                     "</td><td class='num'>" + _hhmm(lv) + "</td></tr>")
+        html = ("<!DOCTYPE html><html lang='zh-TW'><head><meta charset='utf-8'>"
+                "<meta name='viewport' content='width=device-width, initial-scale=1'>"
+                "<title>" + str(v.id) + " \u914d\u9001\u5831\u8868</title>" + css + "</head>"
+                "<body><div class='wrap'>"
+                "<header><h1>\U0001f69a " + str(v.id) + " \u914d\u9001\u5831\u8868</h1>"
+                "<div class='sub'>\u51fa\u767c " + _hhmm(start) + " \uff5c " + str(len(rt["stops"])) +
+                " \u7ad9 \uff5c \u91cc\u7a0b " + ("%.1f" % rt["distance_km"]) + " km \uff5c \u751f\u6210 " + gen +
+                "</div></header>" + _PNG_BTN +
+                "<div class='card'><div class='card-meta'>\u8d77\u9ede " + (v.start_addr or "\u2014") +
+                " \uff5c \u7e3d\u74f6\u6578 " + ("%.0f" % rt["load"]) +
+                " \uff5c \u9810\u8a08\u56de\u5230\u8d77\u9ede " + ret + "\uff08\u76ee\u6a19 17:30\uff09" +
+                ret_tag + fuel_txt + "</div><table><thead><tr><th>#</th><th>\u5e97\u5bb6 / \u5730\u5740</th>"
+                "<th class='num'>\u74f6\u6578</th><th class='num'>\u5230\u5e97</th><th class='num'>\u96e2\u5e97</th></tr></thead>"
+                "<tbody>" + rows + "</tbody></table></div>"
+                "<footer>\u672c\u8eca\u5831\u8868\u7531\u7269\u6d41\u8def\u7dda\u898f\u5283 Agent \u7522\u51fa</footer>"
+                "</div>" + _PNG_SCRIPT + "</body></html>")
+        fp = os.path.join(day_dir, "route_report_" + _safe_veh(v.id) + ".html")
+        with open(fp, "w", encoding="utf-8") as f:
+            f.write(html)
+        out.append((v.id, fp))
+    return out
 
 
 def build_csv_grouped(result, out_path):

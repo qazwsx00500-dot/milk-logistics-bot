@@ -738,6 +738,7 @@ _MAP_TPL = """<!DOCTYPE html>
 <title>鮮奶配送路線地圖</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
 <style>html,body{margin:0;height:100%;font-family:-apple-system,"Microsoft JhengHei",sans-serif;}
 #map{height:100%;width:100%;}
 .panel{position:absolute;top:10px;right:10px;z-index:1000;background:#fff;padding:10px 12px;
@@ -758,12 +759,13 @@ border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,.2);max-height:90%;overflow:au
 <div class="zooms">
   <button class="zbtn" onclick="map.fitBounds(allBounds,{padding:[30,30]})">全覽路線</button>
   <button class="zbtn" onclick="if(firstStop)map.setView([firstStop[0],firstStop[1]],13)">聚焦起點</button>
+  <button class="zbtn" style="background:#0b6b3a" onclick="dlMapPNG()">📥 下載地圖 PNG</button>
 </div>
 <div class="panel" id="panel"></div>
 <script>
 const DATA = /*__DATA__*/;
 const map = L.map('map').setView([24.15, 120.67], 12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, attribution:'&copy; OpenStreetMap'}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom:19, crossOrigin:true, attribution:'&copy; OpenStreetMap'}).addTo(map);
 const panel = document.getElementById('panel');
 function numIcon(label, isStart, color){
   return L.divIcon({className:'', html:'<div class="num-marker'+(isStart?' start':'')+'" style="'+(isStart?'':'background:'+color)+'">'+label+'</div>',
@@ -791,6 +793,17 @@ if (all.length) {
   allBounds = L.latLngBounds(all);
   // 初始視圖：不強制全覽(會讓點擠在一起)，改設適中縮放並以起點為中心
   if (firstStop) map.setView([firstStop[0], firstStop[1]], 12);
+}
+function dlMapPNG(){
+  var btns=document.querySelector('.zooms'); btns.style.visibility='hidden';
+  setTimeout(function(){
+    html2canvas(document.getElementById('map'),{useCORS:true,allowTaint:false,scale:2}).then(function(c){
+      var a=document.createElement('a');
+      a.download='配送地圖_'+new Date().toISOString().slice(0,10)+'.png';
+      a.href=c.toDataURL('image/png'); a.click();
+      btns.style.visibility='visible';
+    }).catch(function(e){alert('產生地圖 PNG 失敗:'+e);btns.style.visibility='visible';});
+  }, 600);
 }
 </script></body></html>"""
 
