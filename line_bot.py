@@ -542,6 +542,7 @@ def handle_file(event, file_msg) -> str:
         "ts": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
     PENDING_FILES[user_id_key(event)] = pending
+    _save_pending(PENDING_FILES)  # 落盤，避免 worker 重啟丟失選車狀態
     from linebot.v3.messaging import QuickReply, QuickReplyItem, MessageAction
     qr = QuickReply(items=[
         QuickReplyItem(action=MessageAction(label="🤖 自動安排", text="自動安排")),
@@ -684,6 +685,30 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     return "\n".join(lines)
 
 
+def _run_choice_from_latest(choice_text):
+    """fallback：使用者直接發車數指令(自動安排/1台/2台/3台)但無 PENDING 暫存時，
+    找最近一次的每日配送檔直接跑規劃。避免 Render worker 重啟導致 PENDING 遺失後選車失效。"""
+    import glob as _glob
+    import logistics_agent as L
+    cands = sorted(_glob.glob(os.path.join(L.DATA_DIR, "每日配送_*.xlsx")),
+                   key=os.path.getmtime, reverse=True)
+    if not cands:
+        return ("⚠ 找不到可規劃的每日配送檔。請先傳 Excel 給我，我再幫你排程。")
+    latest = cands[0]
+    force_v = None
+    if choice_text in ("1台", "2台", "3台"):
+        force_v = int(choice_text[0])
+    try:
+        result, skipped = L.plan_auto_assign(
+            L.DEFAULT_START_HOUR, latest, True, False,
+            fuel_cost_per_km=L._load_fuel_cost(), force_vehicles=force_v)
+        mode_note = (f"你指定 {force_v} 台" if force_v else "由 Agent 自動安排")
+        return _format_result(result, skipped, L._load_fuel_cost(), mode_note, PUBLIC_URL)
+    except Exception as e:
+        traceback.print_exc()
+        return f"⚠ 用最近檔案({os.path.basename(latest)})規劃失敗：{type(e).__name__}: {str(e)[:120]}"
+
+
 def _hhmm(h):
     hh = int(h) % 24
     mm = int(round((h - int(h)) * 60))
@@ -699,7 +724,22 @@ import threading
 LAST_RESULT = {"ts": None, "text": "(尚無結果)", "pushed": None, "error": None}
 
 # 待使用者選車數的暫存（user_id → {rows, fname, ...}）
-PENDING_FILES = {}
+# ⚠️ 必須持久化到磁碟：Render 免費版 worker 閒置會回收，記憶體 dict 會丟失，
+#    導致「傳檔→選車」兩步互動在 worker 重啟後 PENDING_FILES 變空、選車不觸發規劃。
+_PENDING_PATH = os.path.join(HERE, "_pending_files.json")
+def _load_pending():
+    try:
+        with open(_PENDING_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+def _save_pending(d):
+    try:
+        with open(_PENDING_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:
+        pass
+PENDING_FILES = _load_pending()  # 啟動時從磁碟恢復
 
 def _push_to(user_id, text, quick_reply=None):
     """用 Push 推結果給使用者（繞過 reply_token 1 秒過期限制）。"""
@@ -733,7 +773,11 @@ def _process_and_push(user_id, kind, payload):
             # 車數選擇互動：傳檔後使用者回「自動安排/1台/2台/3台」且有暫存檔
             if text.strip() in CHOICE_WORDS and user_id in PENDING_FILES:
                 pending = PENDING_FILES.pop(user_id, None)
+                _save_pending(PENDING_FILES)  # 取走後更新磁碟
                 result = run_plan_choice(user_id, text.strip(), pending)
+            elif text.strip() in CHOICE_WORDS:
+                # fallback：無暫存（worker 重啟/PENDING 遺失）→ 讀最近的每日配送檔直接跑
+                result = _run_choice_from_latest(text.strip())
             else:
                 result = handle_text(text)
         elif kind == "file":
@@ -768,7 +812,23 @@ def callback():
         abort(400)
         return
 
+    from linebot.v3.webhooks.models import PostbackEvent
     for event in events:
+        # 選單回傳可能是 MessageEvent(文字) 或 PostbackEvent，兩者都處理
+        if isinstance(event, PostbackEvent):
+            # 把 postback 的 data 當作文字指令走同一分發邏輯
+            _pb_text = getattr(getattr(event, "postback", None), "data", None) or ""
+            user_id = getattr(getattr(event, "source", None), "user_id", None)
+            try:
+                messaging_api.reply_message(ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=[TextMessage(text="✅ 收到，處理中…（完成後我會主動推播結果）")]))
+            except Exception:
+                traceback.print_exc()
+            t = threading.Thread(target=_process_and_push,
+                                 args=(user_id, "text", _pb_text), daemon=True)
+            t.start()
+            continue
         if not isinstance(event, MessageEvent):
             continue
         # 先拿到 user_id（Push 用）

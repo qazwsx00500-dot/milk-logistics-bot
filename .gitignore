@@ -15,6 +15,9 @@ _normalized_tmp.xlsx
 # 二進位工具 (本機用, 不進 git)
 cloudflared.exe
 
+# 暫存 / 運行態 (不進 git)
+_pending_files.json
+
 # 啟動腳本中的暫存
 .venv/
 venv/
