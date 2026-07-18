@@ -46,7 +46,10 @@ JOBS = [
     ("/map_png",     "DISPATCH_DIR", "route_map.png"),
 ]
 
-_EMPTY_HINTS = ("尚未產生報表", "尚未產生派車單", "尚無路線地圖")
+# JOJO 雲端依設計不產「整合報表.xlsx」與「route_map.png」（改由 ANN 本機產），
+# 這兩個端點回傳的是提示文字而非檔案。必須擋下，否則會把提示文字存成打不開的廢檔。
+_EMPTY_HINTS = ("尚未產生報表", "尚未產生派車單", "尚無路線地圖",
+                "尚未產生整合報表", "尚未產生路線圖")
 
 
 def _fetch(url, timeout=40):
