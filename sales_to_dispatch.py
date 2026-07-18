@@ -6,10 +6,12 @@ JOJO 能吃的「每日配送.xlsx」(5欄: 車號/店家名稱/店家地址/瓶
 處理規則：
   - 工作表 '工作表2'；表頭在第 5 列(index 4)：貨單日期/貨單編號/客戶簡稱/貨品名稱/數量/單位/送貨地址
   - 抬頭行(公司/報表名/貨單日期/製表人) 跳過
-  - 續行列：客戶與地址皆空 → 繼承上一筆的客戶+地址 (加購品項)
-  - 退貨：數量負值 → 與同店同品項銷貨相抵
-  - 同店多筆 → 按 (地址, 品項) 加總；店名取第一筆有值者
-  - 品項判定：貨品名含「鮮乳/鮮奶/牛奶」→ 計入「瓶數」；其餘 → 進「品項」欄
+  |  - 續行列：客戶簡稱 與 送貨地址「皆空」→ 繼承上一筆店家+地址（照片案例：上面店家的品項/數量在下一列續接，店家/地址欄留空）；
+  |    若「店名有值但地址空」「地址有值但店名空」亦視為同一店續行，繼承缺失的那一欄（避免重複排同一地址）
+  |  - 退貨：數量負值 → 與同店同品項銷貨相抵
+  |  - 同店合併：地址正規化（去 '-隨貨附發票' 後綴、去內部空白、全形轉半形、去括號與結尾標點）後比對，按 (地址,品項) 加總；
+  |    同店不同寫法（全/半形數字、有無括號、有無空格）視為同一店，合併成一筆，店名取第一個有值者
+  |  - 品項判定：貨品名含「鮮乳/鮮奶/牛奶」→ 計入「瓶數」；其餘 → 進「品項」欄
   - 地址清理：去掉 '-隨貨附發票'/'-隨貨發票' 後綴再比對同店(避免同店被拆)；寫入時保留原值
 
 用法：
@@ -34,13 +36,39 @@ ROUTE_DIR = os.path.join(ONEDRIVE_DESKTOP, "路線規劃")
 _FRESH_MILK_HINTS = ["鮮乳", "鮮奶", "牛奶"]
 _ADDR_SUFFIX = re.compile(r"\s*[-－]\s*(隨貨附發票|隨貨發票|隨貨|附發票)\s*$")
 
+# 續行列識別：同列「客戶簡稱」與「送貨地址」皆空（貨品/數量那幾欄可能有值）→ 繼承上一筆
+# （見使用者照片：上面店家那列的「品項/數量」在下一列繼續，店家/地址欄留空）
+# 同店合併 key 正規化：去空白/全半形/括號/結尾標點，避免同店被拆成兩筆
+
+
+def _to_half_width(s):
+    """全形數字/字母轉半形，供地址比對去差異。"""
+    out = []
+    for ch in (s or ""):
+        o = ord(ch)
+        if 0xFF01 <= o <= 0xFF5E:   # 全形！到～
+            out.append(chr(o - 0xFEE0))
+        elif o == 0x3000:           # 全形空格
+            out.append(" ")
+        else:
+            out.append(ch)
+    return "".join(out)
+
 
 def _norm_addr(addr):
-    """去後綴 + 統一全半形，供同店比對。"""
+    """去後綴 + 統一全半形/空白/括號/結尾標點，供同店比對（比對用，寫入時仍用原值）。"""
     a = (addr or "").strip()
+    a = _to_half_width(a)
     a = _ADDR_SUFFIX.sub("", a)
-    a = a.replace("臺", "台").replace("　", " ").strip()
+    a = a.replace("臺", "台").replace("　", " ").replace("(", "").replace(")", "")
+    a = re.sub(r"\s+", "", a)          # 內部所有空白都去掉
+    a = a.strip(".,-_/\\ ")             # 結尾標點
     return a
+
+
+def _norm_name(name):
+    """店名正規化（合併同名店用）：去空白/全半形。"""
+    return re.sub(r"\s+", "", _to_half_width(name or ""))
 
 
 def _is_milk(name):
@@ -100,20 +128,29 @@ def convert(src_path, out_path, default_veh="車01"):
         except (ValueError, TypeError):
             qty = 0.0
 
-        # 續行列：無客戶無地址 → 繼承上一筆
-        if not cust and not addr:
+        # 續行列（Bug 3）：客戶簡稱 與 送貨地址 皆空 → 繼承上一筆店家+地址
+        #   （照片案例：上一列有店家/地址+鮮奶，下一列只填品項/數量，店家/地址留空）
+        #   注意：只要「地址空白」就先嘗試繼承（店名空白可視為同一店續行，而非新店）
+        if not addr and not cust:
             cust = last["cust"] or ""
             addr = last["addr"] or ""
-        else:
-            if cust:
-                last["cust"] = cust
-            if addr:
-                last["addr"] = addr
+        elif not addr and cust:
+            # 店名有值但地址空白（續行列只重複了店名）→ 繼承上一筆地址
+            addr = last["addr"] or ""
+        elif not cust and addr:
+            # 地址有值但店名空白 → 繼承上一筆店名
+            cust = last["cust"] or ""
+        # 更新繼承來源（有值才記）
+        if cust:
+            last["cust"] = cust
+        if addr:
+            last["addr"] = addr
 
         if not item or not addr:
             continue  # 無品項或無地址，跳過
 
         akey = _norm_addr(addr)
+        # Bug 2：同店（地址相同）出現多次 → 合併同 (地址, 品項) 加總，避免 JOJO 重複排同一地址
         if akey not in shops:
             shops[akey] = {
                 "name": cust or "未命名店",
@@ -122,8 +159,9 @@ def convert(src_path, out_path, default_veh="車01"):
                 "items": {},
             }
         sh = shops[akey]
-        if cust and not sh["name"].startswith("未命名"):
-            pass  # 保留第一個店名
+        # 保留第一個有真實店名的（避免被「未命名店」覆蓋）
+        if cust and sh["name"].startswith("未命名"):
+            sh["name"] = cust
         if _is_milk(item):
             sh["milk"] += qty
         else:
@@ -134,7 +172,9 @@ def convert(src_path, out_path, default_veh="車01"):
                 sh["items"][item] = {"qty": qty, "unit": unit or "件"}
 
     # 輸出
-    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    d = os.path.dirname(out_path)
+    if d:                      # 避免 --out 給「純檔名」時 dirname 為 '' 導致 makedirs 炸掉
+        os.makedirs(d, exist_ok=True)
     wb2 = openpyxl.Workbook()
     ws2 = wb2.active
     ws2.title = "每日配送"

@@ -320,6 +320,7 @@ def build_html_per_vehicle(result, day_dir, meta=None):
             qty = int(sp.demand) if sp.demand == int(sp.demand) else sp.demand
             rows += ("<tr><td>" + str(si + 1) + "</td><td><b>" + str(sp.name) +
                      "</b><br><span class='addr'>" + str(sp.address) + "</span></td>"
+                     "<td class='num'>" + (_items_str(sp) or "—") + "</td>"
                      "<td class='num'>" + str(qty) + "</td><td class='num'>" + _hhmm(a) +
                      "</td><td class='num'>" + _hhmm(lv) + "</td></tr>")
         html = ("<!DOCTYPE html><html lang='zh-TW'><head><meta charset='utf-8'>"
@@ -334,7 +335,7 @@ def build_html_per_vehicle(result, day_dir, meta=None):
                 " \uff5c \u7e3d\u74f6\u6578 " + ("%.0f" % rt["load"]) +
                 " \uff5c \u9810\u8a08\u56de\u5230\u8d77\u9ede " + ret + "\uff08\u76ee\u6a19 17:30\uff09" +
                 ret_tag + fuel_txt + "</div><table><thead><tr><th>#</th><th>\u5e97\u5bb6 / \u5730\u5740</th>"
-                "<th class='num'>\u74f6\u6578</th><th class='num'>\u5230\u5e97</th><th class='num'>\u96e2\u5e97</th></tr></thead>"
+                "<th class='num'>瓶數</th><th class='num'>品項</th><th class='num'>到店</th><th class='num'>離店</th></tr></thead>"
                 "<tbody>" + rows + "</tbody></table></div>"
                 "<footer>\u672c\u8eca\u5831\u8868\u7531\u7269\u6d41\u8def\u7dda\u898f\u5283 Agent \u7522\u51fa</footer>"
                 "</div>" + _PNG_SCRIPT + "</body></html>")
