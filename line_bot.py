@@ -585,8 +585,8 @@ def handle_file(event, file_msg) -> str:
            f"🔍 轉檔自檢：{'✅ 通過' if not chk_lines else str(len(chk_lines)) + ' 項需留意'}\n")
     if chk_lines:
         msg += "\n".join(chk_lines) + "\n"
-    msg += ("\n🚚 請選擇車輛安排方式（點下方選單）：\n"
-            "  • 自動安排 → 由 Agent 依『09:30出車/{_hhmm(L.TARGET_RETURN_HOUR)}回倉』自動決定車數(最多3台)\n"
+    msg += (f"\n🚚 請選擇車輛安排方式（點下方選單）：\n"
+            f"  • 自動安排 → 由 Agent 依『09:30出車/{_hhmm(L.TARGET_RETURN_HOUR)}回倉』自動決定車數(最多3台)\n"
             f"  • 指定台數(1/2/3台) → 只求最快回倉，不限制{_hhmm(L.TARGET_RETURN_HOUR)}")
     return (msg, qr)
 
