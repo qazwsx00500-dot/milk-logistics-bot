@@ -39,6 +39,23 @@ _REGION_KEYWORDS = [
 ]
 
 
+# 鮮奶關鍵字 (含「鮮乳/鮮奶/牛奶」才計瓶數; 保久乳/糖漿/果泥等歸品項)
+_FRESH_MILK_HINTS = ["鮮乳", "鮮奶", "牛奶"]
+
+
+def _norm_addr(addr):
+    """去後綴 + 統一全半形/空白/括號/結尾標點，供同店比對。"""
+    a = (addr or "").strip()
+    a = a.replace("臺", "台").replace("　", " ").replace("(", "").replace(")", "")
+    a = re.sub(r"\s+", "", a)
+    a = a.strip(".,-_/\\ ")
+    return a
+
+
+def _is_milk(name):
+    return any(h in (name or "") for h in _FRESH_MILK_HINTS)
+
+
 def _norm(h):
     return (h or "").strip().lower().replace(" ", "").replace("　", "")
 
@@ -95,7 +112,12 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         if openpyxl is None:
             raise RuntimeError("請先安裝 openpyxl: uv pip install openpyxl")
         wb = openpyxl.load_workbook(path, data_only=True)
-        ws = wb.active
+        # 優先讀「工作表2」(實際資料表)；找不到再回退 active (與 sales_to_dispatch 一致，
+        # 否則 wb.active 可能指向空白模板表，導致有資料的列被誤判「店家與地址皆空」而跳過)
+        if "工作表2" in wb.sheetnames:
+            ws = wb["工作表2"]
+        else:
+            ws = wb.active
         raw = list(ws.iter_rows(values_only=True))
     if not raw:
         return [], [], None
@@ -124,6 +146,8 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     skipped = []
     rows = []
     fuel_cost = None   # 全車共用油資單價（取第一個有效值）
+    _last = {"name": "", "addr": ""}  # 續行繼承用: 記上一筆有值的店名/地址
+    _shops = {}  # 同店合併: akey -> 合併後店資料
     for i, r in enumerate(raw[header_row_idx + 1:], header_row_idx + 2):
         if all(v is None or v == "" for v in r):
             continue  # 空列跳過
@@ -133,7 +157,8 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
                 return ""
             try:
                 idx = headers.index(col)
-                return r[idx] if idx < len(r) else ""
+                v = r[idx] if idx < len(r) else ""
+                return "" if v is None else v
             except (ValueError, IndexError):
                 return ""
         name = str(_val(col_name)).strip()
@@ -141,6 +166,21 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         qty = _clean_int(_val(col_qty))
         veh = str(_val(col_veh)).strip()
         item = str(_val(col_item)).strip()
+        # 續行繼承 (Bug: 同列前面空白 = 承襲上一列店家/地址)
+        #   客戶簡稱 與 送貨地址 皆空 → 繼承上一筆
+        #   僅地址空白(店名重複) → 繼承上一筆地址
+        #   僅店名空白(地址有值) → 繼承上一筆店名
+        if not name and not addr:
+            name = _last.get("name", "")
+            addr = _last.get("addr", "")
+        elif not addr and name:
+            addr = _last.get("addr", "")
+        elif not name and addr:
+            name = _last.get("name", "")
+        if name:
+            _last["name"] = name
+        if addr:
+            _last["addr"] = addr
         if fuel_cost is None:   # 只取第一個有效油資值
             fv = _val(col_fuel)
             if fv not in (None, ""):
@@ -156,8 +196,31 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         if not addr:
             skipped.append((name or f"第{i}列", "缺少店家地址"))
             continue
-        # 車號若來源沒有 → 留空，由 caller 決定
-        rows.append((veh or "", name or f"店家{i}", addr, qty, item))
+        # 同店合併 (按正規化地址): 避免續行/重複地址被拆成多筆, JOJO 重複排同一地址
+        akey = _norm_addr(addr)
+        if akey not in _shops:
+            _shops[akey] = {"veh": veh, "name": name or f"店家{i}", "addr": addr,
+                            "milk": 0.0, "items": {}}
+        sh = _shops[akey]
+        if veh and not sh["veh"]:
+            sh["veh"] = veh
+        if name and sh["name"].startswith("店家"):
+            sh["name"] = name
+        if _is_milk(item):
+            sh["milk"] += qty
+        elif item:
+            if item in sh["items"]:
+                sh["items"][item] += qty
+            else:
+                sh["items"][item] = qty
+
+    # 合併後輸出 (與 sales_to_dispatch 一致): 瓶數(鮮奶) + 品項欄(非鮮奶彙總)
+    for akey, sh in _shops.items():
+        milk_int = int(round(sh["milk"]))
+        item_str = ", ".join(f"{nm}{qty:.0f}" for nm, qty in sh["items"].items())
+        if milk_int == 0 and not item_str:
+            continue  # 退貨相抵後無貨 → 跳過
+        rows.append((sh["veh"], sh["name"], sh["addr"], milk_int, item_str))
 
     if not rows:
         return [], skipped, None, fuel_cost
