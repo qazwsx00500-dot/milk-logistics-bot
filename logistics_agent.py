@@ -690,6 +690,10 @@ def main():
     html = report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                          meta={"start_hour": args.start})
     csvp = report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
+    # 各車獨立報表（每台車一份，含品項欄，給司機/內勤分別拿）
+    per_veh = report_mod.build_html_per_vehicle(result, day_dir, meta={"start_hour": args.start})
+    for vid, fp in per_veh:
+        print(f"🚚 各車報表({vid})  ：{fp}")
     gmap = build_map(result, day_dir, use_google)
     # 路線圖截 PNG（本機有 Edge/Chrome 才成功；雲端無瀏覽器則回 None）
     from map_capture import capture_map_png

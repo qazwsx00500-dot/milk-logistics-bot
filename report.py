@@ -320,8 +320,9 @@ def build_html_per_vehicle(result, day_dir, meta=None):
             qty = int(sp.demand) if sp.demand == int(sp.demand) else sp.demand
             rows += ("<tr><td>" + str(si + 1) + "</td><td><b>" + str(sp.name) +
                      "</b><br><span class='addr'>" + str(sp.address) + "</span></td>"
+                     "<td class='num'>" + str(qty) + "</td>"
                      "<td class='num'>" + (_items_str(sp) or "—") + "</td>"
-                     "<td class='num'>" + str(qty) + "</td><td class='num'>" + _hhmm(a) +
+                     "<td class='num'>" + _hhmm(a) +
                      "</td><td class='num'>" + _hhmm(lv) + "</td></tr>")
         html = ("<!DOCTYPE html><html lang='zh-TW'><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width, initial-scale=1'>"
