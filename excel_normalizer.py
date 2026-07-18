@@ -81,8 +81,8 @@ def _clean_int(v):
             return 0
         if isinstance(v, (int, float)):
             return int(v)
-        # 去掉逗號/空白後取數字
-        m = re.search(r"\d+", str(v))
+        # 去掉逗號/空白後取數字 (保留負號, 銷貨退回為負)
+        m = re.search(r"-?\d+", str(v))
         return int(m.group()) if m else 0
     except Exception:
         return 0
@@ -218,9 +218,12 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     for akey, sh in _shops.items():
         milk_int = int(round(sh["milk"]))
         item_str = ", ".join(f"{nm}{qty:.0f}" for nm, qty in sh["items"].items())
-        if milk_int == 0 and not item_str:
-            continue  # 退貨相抵後無貨 → 跳過
-        rows.append((sh["veh"], sh["name"], sh["addr"], milk_int, item_str))
+        # 退貨相抵後無貨 (milk<=0 且無其他品項) → 取消訂單, 不排入路線
+        if milk_int <= 0 and not item_str:
+            continue
+        # 有品項但鮮奶相抵成負/0 → 瓶數歸 0 (仍有非鮮奶貨要送)
+        out_milk = milk_int if milk_int > 0 else 0
+        rows.append((sh["veh"], sh["name"], sh["addr"], out_milk, item_str))
 
     if not rows:
         return [], skipped, None, fuel_cost

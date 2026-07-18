@@ -186,10 +186,12 @@ def convert(src_path, out_path, default_veh="車01"):
         item_str = ", ".join(_split_item(nm, d["qty"], d["unit"]) for nm, d in sh["items"].items())
         # 瓶數四捨五入（鮮奶可能是負值退貨相抵後的小數）
         milk_int = int(round(milk))
-        # 退貨相抵後：牛奶 0 瓶且無其他品項 → 該店本日無貨，跳過
-        if milk_int == 0 and not item_str:
+        # 退貨相抵後：牛奶 <=0 瓶且無其他品項 → 該店本日無貨(取消訂單)，跳過
+        if milk_int <= 0 and not item_str:
             continue
-        ws2.append([default_veh, sh["name"], sh["addr_raw"], milk_int, item_str])
+        # 有品項但鮮奶相抵成負/0 → 瓶數歸 0 (仍有非鮮奶貨要送)
+        out_milk = milk_int if milk_int > 0 else 0
+        ws2.append([default_veh, sh["name"], sh["addr_raw"], out_milk, item_str])
         n += 1
     wb2.save(out_path)
     return n, out_path, shops
