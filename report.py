@@ -315,6 +315,7 @@ def build_html_per_vehicle(result, day_dir, meta=None):
         if result.fuel_cost_per_km > 0:
             fuel_txt = " \uff5c \u6cb9\u8cc7 " + ("%.0f" % rt.get("fuel_cost", 0)) + " \u5143"
         rows = ""
+        veh_items = {}  # 本車載貨品項總數: 品名 -> (qty, unit)
         for si, sp in enumerate(rt["stops"]):
             a, lv = rt["etas"][si]
             qty = int(sp.demand) if sp.demand == int(sp.demand) else sp.demand
@@ -324,6 +325,22 @@ def build_html_per_vehicle(result, day_dir, meta=None):
                      "<td class='num'>" + (_items_str(sp) or "—") + "</td>"
                      "<td class='num'>" + _hhmm(a) +
                      "</td><td class='num'>" + _hhmm(lv) + "</td></tr>")
+            # 彙總本車非鮮奶品項
+            items = getattr(sp, "items", None) or {}
+            for nm, d in items.items():
+                if nm not in veh_items:
+                    veh_items[nm] = {"qty": 0.0, "unit": d.get("unit", "")}
+                veh_items[nm]["qty"] += float(d.get("qty", 0))
+        # 本車載貨品項總數區塊 (給司機核對載貨)
+        item_summary = ""
+        if veh_items:
+            item_rows = "".join(
+                "<tr><td>" + nm + "</td><td class='num'>" + ("%.0f" % d["qty"]) +
+                "</td><td>" + (d["unit"] or "") + "</td></tr>"
+                for nm, d in sorted(veh_items.items()))
+            item_summary = ("<div class='card'><div class='card-meta'>📦 本車載貨品項總數（司機核對用）</div>"
+                            "<table><thead><tr><th>品項</th><th class='num'>數量</th><th>單位</th></tr></thead>"
+                            "<tbody>" + item_rows + "</tbody></table></div>")
         html = ("<!DOCTYPE html><html lang='zh-TW'><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width, initial-scale=1'>"
                 "<title>" + str(v.id) + " \u914d\u9001\u5831\u8868</title>" + css + "</head>"
@@ -337,8 +354,8 @@ def build_html_per_vehicle(result, day_dir, meta=None):
                 " \uff5c \u9810\u8a08\u56de\u5230\u8d77\u9ede " + ret + "\uff08\u76ee\u6a19 17:30\uff09" +
                 ret_tag + fuel_txt + "</div><table><thead><tr><th>#</th><th>\u5e97\u5bb6 / \u5730\u5740</th>"
                 "<th class='num'>瓶數</th><th class='num'>品項</th><th class='num'>到店</th><th class='num'>離店</th></tr></thead>"
-                "<tbody>" + rows + "</tbody></table></div>"
-                "<footer>\u672c\u8eca\u5831\u8868\u7531\u7269\u6d41\u8def\u7dda\u898f\u5283 Agent \u7522\u51fa</footer>"
+                "<tbody>" + rows + "</tbody></table></div>" + item_summary +
+                "<footer>本車報表由物流路線規劃 Agent 產出</footer>"
                 "</div>" + _PNG_SCRIPT + "</body></html>")
         fp = os.path.join(day_dir, "route_report_" + _safe_veh(v.id) + ".html")
         with open(fp, "w", encoding="utf-8") as f:

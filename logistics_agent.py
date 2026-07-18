@@ -694,24 +694,34 @@ def main():
     per_veh = report_mod.build_html_per_vehicle(result, day_dir, meta={"start_hour": args.start})
     for vid, fp in per_veh:
         print(f"🚚 各車報表({vid})  ：{fp}")
-    gmap = build_map(result, day_dir, use_google)
+    gmaps = build_map(result, day_dir, use_google)  # 回傳清單: [總圖, 各車圖...]
     # 路線圖截 PNG（本機有 Edge/Chrome 才成功；雲端無瀏覽器則回 None）
     from map_capture import capture_map_png
-    map_png = capture_map_png(gmap, os.path.join(day_dir, "route_map.png"))
+    map_png = None
+    for gp in gmaps:
+        if "route_map.html" == os.path.basename(gp):  # 只截總圖成 PNG（各車圖用互動 HTML）
+            png_path = os.path.join(day_dir, "route_map.png")
+            map_png = capture_map_png(gp, png_path)
+            break
     print(f"\n📁 報表輸出資料夾：{day_dir}")
     print(f"📄 路線報表(HTML)：{html}")
     print(f"📄 路線報表(CSV) ：{csvp}")
-    print(f"🌐 互動地圖      ：{gmap}")
+    print(f"🌐 互動地圖(總圖)：{gmaps[0]}")
+    for gp in gmaps[1:]:
+        print(f"🌐 互動地圖(各車)：{gp}")
     if map_png:
         print(f"🖼️ 路線圖PNG     ：{map_png}")
 
     # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/（台灣時間，與報表一致）
     dispatch_dir = os.path.join(DISPATCH_DIR, _today_tw())
     os.makedirs(dispatch_dir, exist_ok=True)
-    # 把路線圖 PNG 也複製到 dispatch_dir（供同步器統一抓）
+    # 把路線圖 PNG + 各車互動圖 HTML 都複製到 dispatch_dir（供同步器統一抓）
+    import shutil as _sh
     if map_png:
-        import shutil as _sh
         _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
+    for gp in gmaps:
+        if gp != gmaps[0]:  # 各車圖
+            _sh.copy(gp, os.path.join(dispatch_dir, os.path.basename(gp)))
     dhtml, dcsv = report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": args.start})
     # 結構化資料 JSON（供客服助理撈 ETA/貨品/載貨量）
     djson = report_mod.build_dispatch_data(result, os.path.join(dispatch_dir, "dispatch_data.json"),
@@ -731,9 +741,12 @@ def main():
         print(f"📊 整合Excel     ：（未產出，需加 --excel 才產）")
 
 
-def build_map(result, here, use_google):
+def build_map(result, here, use_google, per_vehicle=True):
     import json
+    import re as _re
     from osrm_client import get_route_geometry
+    def _safe_veh(vid):
+        return _re.sub(r"[^\w一-鿿-]", "_", str(vid))
     routes_geo = []
     # 路線顏色：依車數產 N 條，依序 紅/黃/藍（最多 3 台）
     ROUTE_COLORS = ["#e53935", "#fdd835", "#1e88e5"]  # 紅、黃、藍
@@ -752,12 +765,26 @@ def build_map(result, here, use_google):
                            "points": [[a, b] for a, b in points],   # 站點座標（標記用）
                            "line": [[a, b] for a, b in line],        # 道路折線（路線用）
                            "stops": stops_info})
+    out_paths = []
+    # 1) 總路線圖（所有車輛）
     data_json = json.dumps({"depot": None, "routes": routes_geo}, ensure_ascii=False)
-    out = _MAP_TPL.replace("/*__DATA__*/", data_json)
     p = os.path.join(here, "route_map.html")
     with open(p, "w", encoding="utf-8") as f:
-        f.write(out)
-    return p
+        f.write(_MAP_TPL.replace("/*__DATA__*/", data_json))
+    out_paths.append(p)
+    # 2) 各車路線圖（每台車一份）
+    if per_vehicle:
+        for i, rt in enumerate(result.routes):
+            single = [r for r in routes_geo if r["vehicle"] == rt["vehicle"].id]
+            d2 = json.dumps({"depot": None, "routes": single}, ensure_ascii=False)
+            # 標題帶車號
+            tpl = _MAP_TPL.replace("<title>鮮奶配送路線地圖</title>",
+                                   "<title>%s 配送路線地圖</title>" % rt["vehicle"].id)
+            pp = os.path.join(here, "route_map_%s.html" % _safe_veh(rt["vehicle"].id))
+            with open(pp, "w", encoding="utf-8") as f:
+                f.write(tpl.replace("/*__DATA__*/", d2))
+            out_paths.append(pp)
+    return out_paths
 
 
 _MAP_TPL = """<!DOCTYPE html>

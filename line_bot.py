@@ -318,7 +318,7 @@ def run_plan(data_path=None, rows=None):
                                       meta={"start_hour": start_hour})
         report_mod.build_csv_grouped(result, os.path.join(day_dir, "route_report.csv"))
         per_veh = report_mod.build_html_per_vehicle(result, day_dir, meta={"start_hour": start_hour})
-        L.build_map(result, day_dir, use_google)
+        gmaps = L.build_map(result, day_dir, use_google)  # [總圖, 各車圖...] 雲端產互動HTML(無瀏覽器不截PNG)
         # 路線圖 PNG 由本機直跑時產生（本機有 Edge/Chrome）；雲端(Render)無瀏覽器，
         # 不嘗試截圖。使用者於本機執行 sync_from_render.py 會抓本機已產出的 PNG。
         map_png = None
@@ -430,6 +430,16 @@ def handle_file(event, file_msg) -> str:
         return f"⚠ 轉換 Excel 失敗：{type(e).__name__}: {str(e)[:100]}"
 
     # 3) 不直接跑規劃，先問使用者要幾台車（Quick Reply 選單）
+    # 轉檔後自行檢查 (避免把異常資料丟給 JOJO)
+    chk_lines = []
+    err_n = 0
+    for veh, name, addr, qty, item in rows:
+        if not addr or not str(addr).strip():
+            chk_lines.append(f"  ❌ 「{name}」地址空白，無法定位")
+            err_n += 1
+        if isinstance(qty, (int, float)) and qty < 0:
+            chk_lines.append(f"  ❌ 「{name}」瓶數為負({qty})")
+            err_n += 1
     pending = {
         "rows": rows,
         "skipped_n": len(skipped),
@@ -446,10 +456,13 @@ def handle_file(event, file_msg) -> str:
         QuickReplyItem(action=MessageAction(label="3 台", text="3台")),
     ])
     msg = (f"📥 已收到「{fname}」\n"
-           f"✅ 已自動轉成標準每日配送表（{len(rows)} 筆店家，{len(skipped)} 筆跳過）\n\n"
-           f"🔢 請選擇要安排幾台車：\n"
-           f"  • 🤖 自動安排 → 由我依時間窗(17:30回倉)決定 1~3 台\n"
-           f"  • 指定台數 → 只求最快回倉，不限制 17:30")
+           f"✅ 已自動轉成標準每日配送表（{len(rows)} 筆店家，{len(skipped)} 筆跳過）\n"
+           f"🔍 轉檔自檢：{'✅ 通過' if not chk_lines else str(len(chk_lines)) + ' 項需留意'}\n")
+    if chk_lines:
+        msg += "\n".join(chk_lines) + "\n"
+    msg += (f"\n🔢 請選擇要安排幾台車：\n"
+            f"  • 🤖 自動安排 → 由我依時間窗(17:30回倉)決定 1~3 台\n"
+            f"  • 指定台數 → 只求最快回倉，不限制 17:30")
     return (msg, qr)
 
 

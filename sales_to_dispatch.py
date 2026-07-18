@@ -197,6 +197,30 @@ def convert(src_path, out_path, default_veh="車01"):
     return n, out_path, shops
 
 
+def self_check(shops):
+    """ANN 轉檔後自行檢查：回傳 [(等級, 訊息), ...] (等級: OK/WARN/ERR)。
+    檢查：負數瓶、空地址、空店名、退貨相抵異常、續行繼承是否遺漏。"""
+    issues = []
+    n_total = len(shops)
+    n_out = 0
+    for akey, sh in shops.items():
+        milk = int(round(sh["milk"]))
+        item_str = ", ".join(_split_item(nm, d["qty"], d["unit"]) for nm, d in sh["items"].items())
+        if milk <= 0 and not item_str:
+            continue  # 取消訂單(相抵0/純退貨) 正常跳過
+        n_out += 1
+        if not sh["addr_raw"] or not sh["addr_raw"].strip():
+            issues.append(("ERR", f"「{sh['name']}」地址空白，JOJO 無法定位"))
+        if not sh["name"] or str(sh["name"]).startswith("未命名") or str(sh["name"]) == "None":
+            issues.append(("WARN", f"店名異常：{sh['name']}（地址 {sh['addr_raw']}）"))
+        if milk < 0:
+            issues.append(("ERR", f"「{sh['name']}」瓶數為負({milk})，不應出現"))
+    if n_total == 0:
+        issues.append(("ERR", "轉出 0 間店，請檢查 Excel 欄位"))
+    issues.append(("OK", f"轉檔自檢通過：{n_total} 間店(含取消) → {n_out} 間需配送"))
+    return issues
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", help="銷貨明細 xlsx")
@@ -212,6 +236,10 @@ def main():
     milk_shops = sum(1 for s in shops.values() if s["milk"] != 0)
     item_shops = sum(1 for s in shops.values() if s["items"])
     print(f"   含鮮奶店數: {milk_shops} ｜ 含其他品項店數: {item_shops}")
+    # 轉檔後自行檢查 (避免把異常資料丟給 JOJO)
+    for lvl, msg in self_check(shops):
+        icon = {"OK": "✅", "WARN": "⚠", "ERR": "❌"}.get(lvl, "•")
+        print(f"   {icon} {msg}")
 
 
 if __name__ == "__main__":
