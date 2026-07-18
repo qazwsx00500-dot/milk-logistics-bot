@@ -105,9 +105,10 @@ def _git_head():
 @app.route("/version", methods=["GET"])
 def view_version():
     # 版本號與 deployment 標記；改動後 push 即更新，方便確認線上是否為最新
+    import logistics_agent as L
     return Response(
-        f"version=2026-07-18b | git={_git_head()} | "
-        f"target_return=17:00 | geocode=parallel",
+        f"version=2026-07-19b | git={_git_head()} | "
+        f"target_return={_hhmm(L.TARGET_RETURN_HOUR)} | geocode=parallel",
         mimetype="text/plain; charset=utf-8")
 
 
@@ -446,16 +447,16 @@ def run_plan(data_path=None, rows=None):
         # 文字摘要
         veh_note = ""
         if rows is not None and all(r[0] == "" for r in rows):
-            veh_note = f"\n🚚 由 Agent 依『09:30出車/17:00回倉』自動安排 {len(result.routes)} 台車（最多3台，一台跑不完才加車）"
+            veh_note = f"\n🚚 由 Agent 依『09:30出車/{_hhmm(L.TARGET_RETURN_HOUR)}回倉』自動安排 {len(result.routes)} 台車（最多3台，一台跑不完才加車）"
         lines = [f"📦 路線規劃完成（{result.distance_source}）",
-                 f"出發 09:30 ｜ 目標回倉 17:00{veh_note}",
+                 f"出發 09:30 ｜ 目標回倉 {_hhmm(L.TARGET_RETURN_HOUR)}{veh_note}",
                  f"車數 {len(result.routes)} 台 ｜ 總實際里程 {result.total_distance_km:.0f} km ｜ 總瓶數 {int(result.total_load)}"]
         if result.fuel_cost_per_km > 0:
             lines.append(f"⛽ 油資單價 {result.fuel_cost_per_km:.1f} 元/km ｜ 預估總油資 {result.total_fuel_cost:.0f} 元")
         for rt in result.routes:
             v = rt["vehicle"]
             ret = _hhmm(rt["end_hour"])
-            tag = "✅準時回倉" if rt.get("on_time") else f"⚠超過17:00({ret})"
+            tag = "✅準時回倉" if rt.get("on_time") else f"⚠超過{_hhmm(L.TARGET_RETURN_HOUR)}({ret})"
             fuel_txt = f" 油資{rt.get('fuel_cost',0):.0f}元" if result.fuel_cost_per_km > 0 else ""
             lines.append(f"\n【{v.id}】{len(rt['stops'])}站 {rt['distance_km']:.0f}km {ret}回 {tag}{fuel_txt}")
             for si, s in enumerate(rt["stops"][:5]):
@@ -587,8 +588,8 @@ def handle_file(event, file_msg) -> str:
     if chk_lines:
         msg += "\n".join(chk_lines) + "\n"
     msg += ("\n🚚 請選擇車輛安排方式（點下方選單）：\n"
-            "  • 自動安排 → 由 Agent 依『09:30出車/17:00回倉』自動決定車數(最多3台)\n"
-            "  • 指定台數(1/2/3台) → 只求最快回倉，不限制17:00")
+            "  • 自動安排 → 由 Agent 依『09:30出車/{_hhmm(L.TARGET_RETURN_HOUR)}回倉』自動決定車數(最多3台)\n"
+            f"  • 指定台數(1/2/3台) → 只求最快回倉，不限制{_hhmm(L.TARGET_RETURN_HOUR)}")
     return (msg, qr)
 
 
@@ -630,11 +631,11 @@ def run_plan_choice(user_id, choice_text, pending):
         result, skipped = L.plan_auto_assign(
             start_hour, tmp, True, False, fuel_cost_per_km=fuel_cost,
             force_vehicles=force_v)
-        mode_note = f"你指定 {force_v} 台（只求最快回倉，不限制17:00）"
+        mode_note = f"你指定 {force_v} 台（只求最快回倉，不限制{_hhmm(L.TARGET_RETURN_HOUR)}）"
     else:
         result, skipped = L.plan_auto_assign(
             start_hour, tmp, True, False, fuel_cost_per_km=fuel_cost)
-        mode_note = "由 Agent 依『09:30出車/17:00回倉』自動安排"
+        mode_note = f"由 Agent 依『09:30出車/{_hhmm(L.TARGET_RETURN_HOUR)}回倉』自動安排"
 
     if result is None:
         return "⚠ 排程失敗：沒有可規劃的車輛/店家。"
@@ -681,7 +682,7 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
         if rt.get("on_time"):
             tag = "✅準時回倉"
         else:
-            tag = f"⚠回倉 {ret}（指定台數模式不限制17:00）" if "指定" in mode_note else f"⚠超過17:00({ret})"
+            tag = f"⚠回倉 {ret}（指定台數模式不限制{_hhmm(L.TARGET_RETURN_HOUR)}）" if "指定" in mode_note else f"⚠超過{_hhmm(L.TARGET_RETURN_HOUR)}({ret})"
         fuel_txt = f" 油資{rt.get('fuel_cost',0):.0f}元" if result.fuel_cost_per_km > 0 else ""
         lines.append(f"\n【{v.id}】{len(rt['stops'])}站 {rt['distance_km']:.0f}km {ret}回 {tag}{fuel_txt}")
         for si, s in enumerate(rt["stops"][:5]):

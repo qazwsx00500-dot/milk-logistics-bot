@@ -76,13 +76,20 @@ def get_geo(address):
 
 
 def put_geo(address, latlon):
-    """存入地址座標並立即寫檔。latlon=(lat,lon)。"""
+    """存入地址座標並立即寫檔。latlon=(lat,lon)。
+    寫檔前先 reload 磁碟現有內容再 overlay，避免多程序/歷史條目被本程序 subset 覆寫而萎縮。"""
     if not address or not latlon:
         return
     _ensure_loaded()
     with _lock:
-        _geo[address] = [float(latlon[0]), float(latlon[1])]
-        _save(_GEO_PATH, _geo)
+        # 重新從磁碟讀最新全量（其他程序可能寫了新條目），再疊加本次變更
+        try:
+            disk = json.load(open(_GEO_PATH, encoding="utf-8"))
+        except Exception:
+            disk = {}
+        disk[address] = [float(latlon[0]), float(latlon[1])]
+        _geo[address] = disk[address]
+        _save(_GEO_PATH, disk)
 
 
 # ---------------- 距離矩陣快取 ----------------
@@ -110,10 +117,17 @@ def put_pair(lat1, lon1, lat2, lon2, km, sec):
 
 
 def flush():
-    """把距離矩陣快取一次寫回磁碟（批次呼叫後呼叫一次即可）。"""
+    """把距離矩陣快取一次寫回磁碟（批次呼叫後呼叫一次即可）。
+    寫檔前先 reload 磁碟現有全量再 overlay 記憶體變更，避免本程序只 touched
+    部分 key 就把全域快取（其他程序/歷史寫入的條目）砍掉而萎縮。"""
     _ensure_loaded()
     with _lock:
-        _save(_MATRIX_PATH, _matrix)
+        try:
+            disk = json.load(open(_MATRIX_PATH, encoding="utf-8"))
+        except Exception:
+            disk = {}
+        disk.update(_matrix)   # 記憶體變更為權威，疊加到磁碟全量上
+        _save(_MATRIX_PATH, disk)
 
 
 def stats_line():
