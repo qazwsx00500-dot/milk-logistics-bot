@@ -26,6 +26,7 @@ import re
 import io
 import sys
 import json
+import time
 import subprocess as _sp
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -932,4 +933,24 @@ if __name__ == "__main__":
     print(f"   功能: 傳 Excel → 自動下載並排版")
     if not CHANNEL_SECRET or not CHANNEL_TOKEN:
         print("   ⚠ 尚未設定 LINE Token，請先編輯 .env 後重啟。")
+
+    # ---- Keep-alive：Render 免費版閒置會睡著，webhook 首次觸發需冷啟動(~數十秒)
+    #    導致傳檔後很久才收到結果。每 10 分鐘自 ping 自己 / 端點，保持服務喚醒。
+    #    daemon 背景線程，掛了也不影響主服務；本機開發照跑無副作用。
+    def _keepalive_loop(interval=600):
+        import urllib.request as _ur
+        import urllib.error as _ue
+        while True:
+            try:
+                _ur.urlopen(f"http://127.0.0.1:{port}/", timeout=10)
+            except Exception:
+                pass  # 啟動初期還沒 listen 也無妨，下輪再試
+            time.sleep(interval)
+
+    try:
+        threading.Thread(target=_keepalive_loop, daemon=True).start()
+        print("🔄 keep-alive 已啟動（每 10 分鐘自 ping，避免 Render 冷啟動變慢）")
+    except Exception:
+        pass
+
     app.run(host="0.0.0.0", port=port)
