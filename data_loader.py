@@ -49,6 +49,27 @@ _ADDR_KEYS = ["店家地址", "地址", "客戶地址", "address", "addr"]
 _QTY_KEYS = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count"]
 _ITEM_KEYS = ["品項", "品名", "貨品", "品項名稱", "項目", "item", "items"]
 EXTRA_SERVICE_SEC_FOR_ITEMS = 180.0   # 該店有非鮮奶品項時，額外加 180 秒 (~3分)
+
+# ── 品名 → 強制單位對照表（Ann 確認規則，2026-07-19）──────────────
+#   保久乳 / 糖漿      → 強制「瓶」（無視 Excel 原單位）
+#   紫米紅豆           → 強制「罐」
+#   鳳梨果泥           → 強制「包」
+#   冰勃朗             → 不列入（維持 Excel 原單位，瓶或箱依表為主）
+#   其餘未列品項       → 不列入（維持 Excel 原單位，空則回退「件」）
+# 匹配方式：品名「包含」關鍵字即命中（如「冰勃朗非氫化基底乳」含「冰勃朗」）。
+UNIT_OVERRIDE = {
+    "保久乳": "瓶",
+    "糖漿": "瓶",
+    "紫米紅豆": "罐",
+    "鳳梨果泥": "包",
+}
+
+def _override_unit(name, unit):
+    """品名命中對照表則強制覆寫單位，否則維持原 unit（空則回退『件』）。"""
+    for kw, u in UNIT_OVERRIDE.items():
+        if kw in name:
+            return u
+    return unit
 _FRESH_MILK_HINTS = ["鮮乳", "鮮奶", "牛奶"]
 _START_KEYS = ["出發點地址", "起點地址", "倉庫地址", "出發地址",
                "start_address", "depot_address", "start", "depot"]
@@ -120,10 +141,12 @@ def parse_items(raw):
             except ValueError:
                 qty = 0.0
             unit = (m.group(3) or "").strip() or "件"
+            unit = _override_unit(name, unit)
         else:
             name = part
             qty = 1.0
             unit = "件"
+            unit = _override_unit(name, unit)
         if name:
             if name in out:
                 out[name]["qty"] += qty
