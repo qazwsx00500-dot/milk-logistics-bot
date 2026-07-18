@@ -361,11 +361,13 @@ def run_plan(data_path=None, rows=None):
         if PUBLIC_URL:
             lines.append(f"\n📄 總表：{PUBLIC_URL}/report")
             lines.append(f"📊 CSV ：{PUBLIC_URL}/report.csv")
-            lines.append(f"🗺️ 地圖：{PUBLIC_URL}/route_map（可下載PNG）")
+            lines.append(f"🗺️ 地圖（總圖）：{PUBLIC_URL}/route_map")
+            lines.append("   ※ 地圖頁內含「📥 下載地圖 PNG」按鈕，手機/電腦可直接存圖")
             lines.append("🚚 各車獨立報表（可分別轉給司機，可下載PNG）：")
             for rt in result.routes:
                 vid = rt["vehicle"].id
-                lines.append(f"  ・{vid}：{PUBLIC_URL}/report/{report_mod._safe_veh(vid)}")
+                lines.append(f"  ・{vid} 報表：{PUBLIC_URL}/report/{report_mod._safe_veh(vid)}")
+                lines.append(f"  ・{vid} 路線圖：{PUBLIC_URL}/route_map/{report_mod._safe_veh(vid)}")
         else:
             lines.append(f"\n📁 報表已產出：{day_dir}")
 
@@ -570,11 +572,13 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     if public_url:
         lines.append(f"\n📄 總表：{public_url}/report")
         lines.append(f"📊 CSV ：{public_url}/report.csv")
-        lines.append(f"🗺️ 地圖：{public_url}/route_map（可下載PNG）")
+        lines.append(f"🗺️ 地圖（總圖）：{public_url}/route_map")
+        lines.append("   ※ 地圖頁內含「📥 下載地圖 PNG」按鈕，手機/電腦可直接存圖")
         lines.append("🚚 各車獨立報表（可分別轉給司機，可下載PNG）：")
         for rt in result.routes:
             vid = rt["vehicle"].id
-            lines.append(f"  ・{vid}：{public_url}/report/{report_mod._safe_veh(vid)}")
+            lines.append(f"  ・{vid} 報表：{public_url}/report/{report_mod._safe_veh(vid)}")
+            lines.append(f"  ・{vid} 路線圖：{public_url}/route_map/{report_mod._safe_veh(vid)}")
     else:
         lines.append(f"\n📁 報表已產出：{day_dir}")
     return "\n".join(lines)
@@ -702,6 +706,21 @@ def view_route_map():
     if os.path.exists(p):
         return send_file(p)
     return Response("尚無路線地圖。請先傳 Excel 觸發規劃。", mimetype="text/plain; charset=utf-8")
+
+
+@app.route("/route_map/<vid>", methods=["GET"])
+def view_route_map_vehicle(vid):
+    """各車獨立路線地圖 (route_map_<safe車號>.html)。"""
+    import logistics_agent as L
+    day = _today_tw()
+    # 先試 safe 化後的車號檔名；再試原值 safe 化（與 build_map 的 _safe_veh 對齊）
+    import report as _report_mod
+    safe = _report_mod._safe_veh(vid)
+    for cand in (safe, vid, _report_mod._safe_veh(vid)):
+        p = os.path.join(L.REPORT_DIR, day, "route_map_%s.html" % cand)
+        if os.path.exists(p):
+            return send_file(p)
+    return Response("尚無該車路線地圖。請先傳 Excel 觸發規劃。", mimetype="text/plain; charset=utf-8")
 
 
 @app.route("/last_result", methods=["GET"])

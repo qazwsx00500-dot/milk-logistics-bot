@@ -221,8 +221,16 @@ def load_from_rows(rows, headers, depot=None):
 
 # 用 geocoder 的批次（含快取）
 def geocode_batch(addresses):
+    """一次性批次地理編碼（內部已含持久化快取：命中者零網路呼叫）。
+    注意：原先寫成 [geocode_many([a]) for a in addresses] —— 對每個地址
+    單獨呼叫一次，等於把批量介面包裝成「逐條串行」+ 重複快取查詢開銷，
+    幾十個店家就變幾十次往返。改成一次 geocode_many(addresses) 讓快取命中者
+    瞬回、未命中者統一批量處理，地理編碼階段顯著加速。"""
     from geocoder import geocode_many
-    return [geocode_many([a]).get(a) for a in addresses]
+    # 去重保順序（同地址只查一次，避免重複 Google 呼叫）
+    uniq = list(dict.fromkeys(addresses))
+    res = geocode_many(uniq)
+    return [res.get(a) for a in addresses]
 
 
 def load_excel(path, depot=None):

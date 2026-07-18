@@ -750,14 +750,27 @@ def build_map(result, here, use_google, per_vehicle=True):
     routes_geo = []
     # 路線顏色：依車數產 N 條，依序 紅/黃/藍（最多 3 台）
     ROUTE_COLORS = ["#e53935", "#fdd835", "#1e88e5"]  # 紅、黃、藍
+    veh_points = []
     for i, rt in enumerate(result.routes):
         v = rt["vehicle"]
         color = ROUTE_COLORS[i % len(ROUTE_COLORS)]
         points = [(v.start_lat, v.start_lon)] + [(s.lat, s.lon) for s in rt["stops"]] + [(v.start_lat, v.start_lon)]
-        # 真實道路折線：逐段向 OSRM 取幾何，失敗則退回直線連接
+        veh_points.append((rt, v, color, points))
+    # 並行抓取每車的真實道路折線（OSRM 公開服務串行很慢，多車同時抓顯著加速）
+    from concurrent.futures import ThreadPoolExecutor
+    def _fetch_one(item):
+        rt, v, color, points = item
         line = get_route_geometry(points)
         if not line:
             line = [[a, b] for a, b in points]   # 退回直線
+        return rt, v, color, points, line
+    try:
+        with ThreadPoolExecutor(max_workers=min(len(veh_points), 6) or 1) as ex:
+            fetched = list(ex.map(_fetch_one, veh_points))
+    except Exception:
+        # 任何並行異常 → 退回串行，保證地圖一定產得出來
+        fetched = [_fetch_one(it) for it in veh_points]
+    for rt, v, color, points, line in fetched:
         stops_info = [{"name": s.name, "demand": s.demand, "addr": s.address} for s in rt["stops"]]
         routes_geo.append({"color": color, "vehicle": v.id,
                            "distance": round(rt["distance_km"], 1),
