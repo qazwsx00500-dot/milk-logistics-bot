@@ -123,6 +123,57 @@ def _fix_vid(vid):
     except Exception:
         return vid
 
+
+def _persist_cache_to_git():
+    """跑完規劃後，把累積的快取(geo_cache.json/matrix_cache.json)自動 push 回 GitHub。
+    根因：Render 免費容器每次部署會清空硬碟 → 雲端快取每次都從零開始 →
+    LINE 第一次跑仍是全量打 Google（幾十個新地址 = 幾十秒慢）。
+    解法：每次跑完若有新快取，commit+push 回 GitHub，下次部署自動帶上累積快取，
+    云端的 LINE 路徑也能 0-Google 跑完。
+    - 本機(SSH remote)照常運作，不干擾。
+    - Render 上用 GITHUB_TOKEN 環境變數以 HTTPS(x-access-token) 推送（容器無 SSH key）。
+    - 任何失敗都吞掉：快取回寫只是加速，絕不能讓主流程/LINE 回傳掛掉。
+    """
+    try:
+        import subprocess
+        here = os.path.dirname(os.path.abspath(__file__))
+        # 只追蹤這兩個快取檔
+        caches = ["geo_cache.json", "matrix_cache.json"]
+        # 有變動才 push
+        st = subprocess.run(["git", "status", "--porcelain"] + caches,
+                            cwd=here, capture_output=True, text=True, timeout=20)
+        if not st.stdout.strip():
+            return  # 無新快取，跳過
+        # 設定 push URL：有 GITHUB_TOKEN 就用 token HTTPS（Render 用），否則沿用現有 remote
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        env = dict(os.environ)
+        if token:
+            subprocess.run(["git", "config", "user.email", "bot@milk-logistics.local"],
+                           cwd=here, capture_output=True, timeout=20)
+            subprocess.run(["git", "config", "user.name", "cache-bot"],
+                           cwd=here, capture_output=True, timeout=20)
+            # 臨時把 origin push URL 換成 token HTTPS（不改本機 SSH 設定）
+            subprocess.run(
+                ["git", "remote", "set-url", "origin",
+                 f"https://x-access-token:{token}@github.com/qazwsx00500-dot/milk-logistics-bot.git"],
+                cwd=here, capture_output=True, timeout=20, env=env)
+        subprocess.run(["git", "add"] + caches, cwd=here, capture_output=True, timeout=30)
+        subprocess.run(["git", "commit", "-m",
+                        "chore: 自動回寫快取(geo/matrix) 加速雲端 LINE 路徑"],
+                       cwd=here, capture_output=True, timeout=30)
+        subprocess.run(["git", "push", "origin", "main"], cwd=here,
+                       capture_output=True, timeout=90, env=env)
+        # 若用 token 改過 remote，還原回 SSH（本機開發不受影響）
+        if token:
+            subprocess.run(["git", "remote", "set-url", "origin",
+                            "git@github.com:qazwsx00500-dot/milk-logistics-bot.git"],
+                           cwd=here, capture_output=True, timeout=20, env=env)
+        print("✅ 快取已自動回寫 GitHub（下次部署雲端即 0-Google）")
+    except Exception as e:
+        print(f"⚠ 快取回寫失敗（不影響 LINE 回傳）: {e}")
+
+
+
 @app.route("/report/<vid>", methods=["GET"])
 def view_report_vehicle(vid):
     """單一車輛的獨立報表（含 PNG 下載按鈕，可分別轉給司機）。"""
@@ -402,6 +453,12 @@ def run_plan(data_path=None, rows=None):
         except Exception as e:
             print(f"⚠ 自動複檢失敗（不影響 LINE 回傳）: {e}")
 
+        # 💾 跑完自動把累積快取(geo/matrix)回寫 GitHub → 雲端部署即帶上，LINE 路徑 0-Google
+        try:
+            _persist_cache_to_git()
+        except Exception as e:
+            print(f"⚠ 快取回寫異常（不影響 LINE 回傳）: {e}")
+
         return "\n".join(lines)
     except Exception as e:
         traceback.print_exc()
@@ -590,6 +647,13 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
             lines.append(f"  ・{vid} 路線圖：{public_url}/route_map/{report_mod._safe_veh(vid)}")
     else:
         lines.append(f"\n📁 報表已產出：{day_dir}")
+
+    # 💾 跑完自動把累積快取(geo/matrix)回寫 GitHub → 雲端部署即帶上，LINE 路徑 0-Google
+    try:
+        _persist_cache_to_git()
+    except Exception as e:
+        print(f"⚠ 快取回寫異常（不影響 LINE 回傳）: {e}")
+
     return "\n".join(lines)
 
 
