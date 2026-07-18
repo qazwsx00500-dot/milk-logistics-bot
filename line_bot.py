@@ -137,6 +137,9 @@ def _persist_cache_to_git():
     try:
         import subprocess
         here = os.path.dirname(os.path.abspath(__file__))
+        # 防護：容器內若不是 git repo 或無 .git（例如 Render 用非 git 部署），直接跳過
+        if not os.path.isdir(os.path.join(here, ".git")):
+            return
         # 只追蹤這兩個快取檔
         caches = ["geo_cache.json", "matrix_cache.json"]
         # 有變動才 push
