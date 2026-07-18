@@ -456,11 +456,14 @@ def run_plan(data_path=None, rows=None):
         except Exception as e:
             print(f"⚠ 自動複檢失敗（不影響 LINE 回傳）: {e}")
 
-        # 💾 跑完自動把累積快取(geo/matrix)回寫 GitHub → 雲端部署即帶上，LINE 路徑 0-Google
+        # 💾 跑完自動把累積快取(geo/matrix)回寫 GitHub（背景執行，不阻塞回傳）
+        #    關鍵：git push 在 Render 雲端可能因 SSH/HTTPS 互動卡住，若同步呼叫會
+        #    讓整個後台處理緒卡在 push 那行 → LAST_RESULT 寫不進、Push 發不出 → 使用者收不到結果。
+        #    改丟進 daemon 背景線程，主流程先回傳，push 在背後跑（卡住只卡那個線程）。
         try:
-            _persist_cache_to_git()
+            threading.Thread(target=_persist_cache_to_git, daemon=True).start()
         except Exception as e:
-            print(f"⚠ 快取回寫異常（不影響 LINE 回傳）: {e}")
+            print(f"⚠ 快取回寫啟動失敗（不影響 LINE 回傳）: {e}")
 
         return "\n".join(lines)
     except Exception as e:
@@ -651,11 +654,12 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     else:
         lines.append(f"\n📁 報表已產出：{day_dir}")
 
-    # 💾 跑完自動把累積快取(geo/matrix)回寫 GitHub → 雲端部署即帶上，LINE 路徑 0-Google
+    # 💾 跑完自動把累積快取(geo/matrix)回寫 GitHub（背景執行，不阻塞回傳）
+    #    同 run_plan：git push 在雲端可能卡住，改丟 daemon 背景線程，主流程先回傳。
     try:
-        _persist_cache_to_git()
+        threading.Thread(target=_persist_cache_to_git, daemon=True).start()
     except Exception as e:
-        print(f"⚠ 快取回寫異常（不影響 LINE 回傳）: {e}")
+        print(f"⚠ 快取回寫啟動失敗（不影響 LINE 回傳）: {e}")
 
     return "\n".join(lines)
 
