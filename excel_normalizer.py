@@ -1,14 +1,15 @@
 """
 excel_normalizer.py — 把「任意來源 Excel」轉成標準每日配送表
 
-標準格式 (4 欄)：車號 / 店家名稱 / 店家地址 / 瓶數
+標準格式 (5 欄)：車號 / 店家名稱 / 店家地址 / 瓶數 / 品項
 來源可能：
-  - 欄位名不同 (車輛/店名/地址/數量...) → 寬鬆對應
+  - 欄位名不同 (車輛/店名/地址/數量/品名...) → 寬鬆對應
   - 沒有「車號」欄 → 留空，由 caller 決定怎麼分車
+  - 沒有「品項」欄 → 留空（純鮮奶配送）
   - 地址欄可能夾雜「-隨貨附發票」之類後綴 → 保留原值(地理編碼時再清理)
   - 多餘列/空列 → 跳過
 
-產出：DataFame(標準4欄) + 存檔 每日配送_YYYYMMDD.xlsx 到 out_dir
+產出：DataFame(標準5欄) + 存檔 每日配送_YYYYMMDD.xlsx 到 out_dir
 """
 
 import os
@@ -25,6 +26,7 @@ _VEH = ["車號", "車輛", "路線編號", "路線", "route", "vehicle", "車",
 _NAME = ["店家名稱", "名稱", "店名", "客戶名稱", "客戶簡稱", "客戶", "簡稱", "店家", "name", "店", "對象"]
 _ADDR = ["店家地址", "送貨地址", "地址", "客戶地址", "送貨", "address", "addr", "位置"]
 _QTY = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count", "件數", "瓶", "量"]
+_ITEM = ["品項", "品名", "貨品", "項目", "item", "items"]
 _FUEL = ["油資單價", "油資", "油錢單價", "fuel", "fuel_cost", "fuel_cost_per_km", "元每km"]
 
 # 台灣縣市關鍵字（用於無車號時的地理分車）
@@ -72,8 +74,7 @@ def _clean_int(v):
 def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     """
     讀任意來源 Excel，轉成標準 4 欄 DataFrame。
-    回傳 (rows, skipped, out_path)
-      rows: [(車號, 店家名稱, 店家地址, 瓶數), ...]  (車號可能為 "")
+    rows: [(車號, 店家名稱, 店家地址, 瓶數, 品項), ...]  (車號可能為 "")
       skipped: [(原始店名或標記, 原因), ...]
       out_path: 存的檔路徑 (每日配送_YYYYMMDD.xlsx) 或 None(若沒裝 openpyxl)
     """
@@ -118,6 +119,7 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     col_qty = _match_col(hnorm, _QTY)
     col_veh = _match_col(hnorm, _VEH)
     col_fuel = _match_col(hnorm, _FUEL)
+    col_item = _match_col(hnorm, _ITEM)
 
     skipped = []
     rows = []
@@ -138,6 +140,7 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         addr = str(_val(col_addr)).strip()
         qty = _clean_int(_val(col_qty))
         veh = str(_val(col_veh)).strip()
+        item = str(_val(col_item)).strip()
         if fuel_cost is None:   # 只取第一個有效油資值
             fv = _val(col_fuel)
             if fv not in (None, ""):
@@ -154,12 +157,12 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
             skipped.append((name or f"第{i}列", "缺少店家地址"))
             continue
         # 車號若來源沒有 → 留空，由 caller 決定
-        rows.append((veh or "", name or f"店家{i}", addr, qty))
+        rows.append((veh or "", name or f"店家{i}", addr, qty, item))
 
     if not rows:
         return [], skipped, None, fuel_cost
 
-    # 存成標準檔：每日配送_YYYYMMDD.xlsx
+    # 存成標準檔：每日配送_YYYYMMDD.xlsx (5欄)
     date_str = date_str or datetime.datetime.now().strftime("%Y%m%d")
     os.makedirs(out_dir, exist_ok=True)
     out_path = os.path.join(out_dir, f"每日配送_{date_str}.xlsx")
@@ -167,9 +170,9 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     wb2 = Workbook()
     ws2 = wb2.active
     ws2.title = "每日配送"
-    ws2.append(["車號", "店家名稱", "店家地址", "瓶數"])
-    for veh, name, addr, qty in rows:
-        ws2.append([veh, name, addr, qty])
+    ws2.append(["車號", "店家名稱", "店家地址", "瓶數", "品項"])
+    for veh, name, addr, qty, item in rows:
+        ws2.append([veh, name, addr, qty, item])
     wb2.save(out_path)
     return rows, skipped, out_path, fuel_cost
 

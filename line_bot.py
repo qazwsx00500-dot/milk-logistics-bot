@@ -280,9 +280,10 @@ def run_plan(data_path=None, rows=None):
             from openpyxl import Workbook as _WB
             tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
             wb = _WB(); ws = wb.active; ws.title = "每日配送"
-            ws.append(["車號", "店家名稱", "店家地址", "瓶數"])
-            for veh, n, a, q in rows:
-                ws.append([veh, n, a, q])
+            ws.append(["車號", "店家名稱", "店家地址", "瓶數", "品項"])
+            for veh, n, a, q, *rest in rows:
+                item = rest[0] if rest else ""
+                ws.append([veh, n, a, q, item])
             wb.save(tmp)
             data_path = tmp
 
@@ -319,6 +320,9 @@ def run_plan(data_path=None, rows=None):
         dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
         os.makedirs(dispatch_dir, exist_ok=True)
         report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": start_hour})
+        # 結構化資料 JSON（供客服助理撈 ETA/貨品/載貨量）
+        report_mod.build_dispatch_data(result, os.path.join(dispatch_dir, "dispatch_data.json"),
+                                       meta={"start_hour": start_hour})
         # 整合 Excel 雲端不自動產（缺路線圖分頁），改由本機 --excel 直跑產出
         xlsx = None
 
@@ -462,9 +466,10 @@ def run_plan_choice(user_id, choice_text, pending):
     from openpyxl import Workbook as _WB
     tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
     wb = _WB(); ws = wb.active; ws.title = "每日配送"
-    ws.append(["車號", "店家名稱", "店家地址", "瓶數"])
-    for veh, n, a, q in rows:
-        ws.append([veh, n, a, q])
+    ws.append(["車號", "店家名稱", "店家地址", "瓶數", "品項"])
+    for veh, n, a, q, *rest in rows:
+        item = rest[0] if rest else ""
+        ws.append([veh, n, a, q, item])
     wb.save(tmp)
 
     had_no_vehicle = all(r[0] == "" for r in rows)

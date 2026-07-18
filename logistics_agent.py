@@ -688,6 +688,9 @@ def main():
         import shutil as _sh
         _sh.copy(map_png, os.path.join(dispatch_dir, "route_map.png"))
     dhtml, dcsv = report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": args.start})
+    # 結構化資料 JSON（供客服助理撈 ETA/貨品/載貨量）
+    djson = report_mod.build_dispatch_data(result, os.path.join(dispatch_dir, "dispatch_data.json"),
+                                           meta={"start_hour": args.start})
     # 整合 Excel 預設不產（使用者決定：需時加 --excel）；LINE/雲端也不自動產
     xlsx = None
     if args.excel:

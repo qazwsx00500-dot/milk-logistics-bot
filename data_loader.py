@@ -6,11 +6,16 @@ data_loader.py — 讀取店家資料 (Excel / CSV)，照車號分組
   店家名稱   / 名稱 / 店名 / name
   店家地址   / 地址 / address
   瓶數       / 數量 / qty / bottles
+  品項       / 品名 / 貨品 / 項目 / item
+                -> 非鮮奶貨品，文字格式「品名數量(單位)」可用逗號隔多品項
+                   (例如: 冰勃朗非氫化基底乳1(箱),鳳梨果泥3(包))
+                   鮮乳類已計入「瓶數」，不在此欄
   出發點地址 / 起點地址 / 倉庫地址 / start_address / depot_address  -> 每台車出發點
 
 自動：
   - 地理編碼 (店家地址 + 出發點地址 -> 座標)
   - 由瓶數計算 下貨時間 (瓶數 * 15 秒)
+  - 若有非鮮奶品項，每店額外加 180 秒 (約3分鐘)
   - 照車號分組，每台車獨立回傳
 
 回傳 (vehicles, stops_by_vehicle, skipped)
@@ -21,6 +26,7 @@ data_loader.py — 讀取店家資料 (Excel / CSV)，照車號分組
 
 import os
 import csv
+import re
 
 try:
     import openpyxl
@@ -41,6 +47,9 @@ _VEH_KEYS = ["車號", "車輛", "路線編號", "路線", "route", "vehicle", "
 _NAME_KEYS = ["店家名稱", "名稱", "店名", "客戶名稱", "name", "店家"]
 _ADDR_KEYS = ["店家地址", "地址", "客戶地址", "address", "addr"]
 _QTY_KEYS = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count"]
+_ITEM_KEYS = ["品項", "品名", "貨品", "品項名稱", "項目", "item", "items"]
+EXTRA_SERVICE_SEC_FOR_ITEMS = 180.0   # 該店有非鮮奶品項時，額外加 180 秒 (~3分)
+_FRESH_MILK_HINTS = ["鮮乳", "鮮奶", "牛奶"]
 _START_KEYS = ["出發點地址", "起點地址", "倉庫地址", "出發地址",
                "start_address", "depot_address", "start", "depot"]
 _FUEL_KEYS = ["油資單價", "油資", "油錢單價", "fuel", "fuel_cost", "fuel_cost_per_km", "元每km"]
@@ -91,6 +100,38 @@ def _get(row, keys, idx_by_norm):
     return None
 
 
+def parse_items(raw):
+    """把『品項』欄文字解析成 {品名: {"qty": float, "unit": str}}。
+    格式: 品名數量(單位)，多品項用逗號/、/；分隔。例:
+      '冰勃朗非氫化基底乳1(箱),鳳梨果泥3(包)'
+    數量可能帶小數；單位可省略(預設 '件')。空白或 None -> {}。"""
+    out = {}
+    if not raw or not str(raw).strip():
+        return out
+    for part in re.split(r"[,，、;；]+", str(raw)):
+        part = part.strip()
+        if not part:
+            continue
+        m = re.match(r"^(.+?)\s*[-]?\s*([\d.]+)\s*(?:\(([^)]*)\))?\s*$", part)
+        if m:
+            name = m.group(1).strip()
+            try:
+                qty = float(m.group(2))
+            except ValueError:
+                qty = 0.0
+            unit = (m.group(3) or "").strip() or "件"
+        else:
+            name = part
+            qty = 1.0
+            unit = "件"
+        if name:
+            if name in out:
+                out[name]["qty"] += qty
+            else:
+                out[name] = {"qty": qty, "unit": unit}
+    return out
+
+
 def load_from_rows(rows, headers, depot=None):
     idx_by_norm = {_norm_header(h): h for h in headers}
     vehicles = {}            # 車號 -> Vehicle (暫存)
@@ -109,7 +150,12 @@ def load_from_rows(rows, headers, depot=None):
             qty = float(qty_raw) if qty_raw not in (None, "") else 0.0
         except ValueError:
             qty = 0.0
+        # 品項欄：非鮮奶貨品，文字 -> dict
+        item_raw = _get(row, _ITEM_KEYS, idx_by_norm)
+        items = parse_items(item_raw)
         svc = qty * SERVICE_SEC_PER_BOTTLE
+        if items:
+            svc += EXTRA_SERVICE_SEC_FOR_ITEMS   # 有非鮮奶品項 → 每店 +3分
 
         veh = str(veh_raw).strip() if veh_raw not in (None, "") else "未分車"
         if not addr:
@@ -118,7 +164,8 @@ def load_from_rows(rows, headers, depot=None):
 
         stop = Stop(id=f"{veh}-{len(stops_by_vehicle.get(veh, []))+1:03d}",
                     name=name, lat=0.0, lon=0.0, demand=qty,
-                    service_time=svc, address=addr, vehicle=veh)
+                    service_time=svc, address=addr, vehicle=veh,
+                    items=dict(items))
         stops_by_vehicle.setdefault(veh, []).append(stop)
         # 起點：若有總倉 depot 則統一用總倉；否則用 Excel 出發點地址欄
         if depot is not None:

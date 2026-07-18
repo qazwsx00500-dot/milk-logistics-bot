@@ -23,10 +23,15 @@ class Stop:
     name: str
     lat: float
     lon: float
-    demand: float = 0.0          # 瓶數
-    service_time: float = 0.0    # 下貨秒數 (= 瓶數 * 15)
+    demand: float = 0.0          # 瓶數 (鮮乳類)
+    service_time: float = 0.0    # 下貨秒數 (= 瓶數*15 + 有非鮮奶品項? 180 : 0)
     address: str = ""
     vehicle: str = ""            # 所屬車號
+    items: dict = None           # 非鮮奶品項: {品名: {"qty": float, "unit": str}}
+                                  #   (鮮乳已計入 demand，不在此)
+    def __post_init__(self):
+        if self.items is None:
+            self.items = {}
 
 
 @dataclass

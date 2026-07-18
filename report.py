@@ -44,6 +44,14 @@ def _hhmm(hour_float):
     return f"{h:02d}:{m:02d}"
 
 
+def _items_str(stop):
+    """回傳該站非鮮奶品項的顯示字串，如 '冰勃朗1(箱),鳳梨果泥3(包)'；無則空字。"""
+    items = getattr(stop, "items", None) or {}
+    if not items:
+        return ""
+    return ", ".join(f"{n}{v['qty']:.0f}({v['unit']})" for n, v in items.items())
+
+
 def _eta_rows(result, depot):
     """把所有路線攤平成逐站報表列。"""
     rows = []
@@ -56,7 +64,7 @@ def _eta_rows(result, depot):
         for si, s in enumerate(rt["stops"]):
             # 行車里程 (用該段直線? 這裡用 result 的 distance 反推不精確，改用點對直線估算僅供參考)
             arrive, leave = rt["etas"][si]
-            qty = getattr(s, "qty", s.demand)
+            qty = getattr(s, "demand", 0)
             svc = int(round(getattr(s, "service_time", 0) or 0))
             rows.append({
                 "route_no": ri,
@@ -65,6 +73,7 @@ def _eta_rows(result, depot):
                 "name": s.name,
                 "address": getattr(s, "address", ""),
                 "qty": int(qty) if qty == int(qty) else qty,
+                "items": _items_str(s),
                 "service_sec": svc,
                 "arrive": _hhmm(arrive),
                 "leave": _hhmm(leave),
@@ -89,9 +98,11 @@ def build_html(result, depot, out_path, meta=None):
         for si, s in enumerate(rt["stops"]):
             a, lv = rt["etas"][si]
             qty = getattr(s, "qty", s.demand)
+            item_txt = _items_str(s)
             stops_html += (
                 f"<tr><td>{si+1}</td><td><b>{s.name}</b><br><span class='addr'>{getattr(s,'address','')}</span></td>"
                 f"<td class='num'>{int(qty) if qty==int(qty) else qty}</td>"
+                f"<td class='num'>{item_txt or '—'}</td>"
                 f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td></tr>"
             )
         route_cards += f"""
@@ -103,7 +114,7 @@ def build_html(result, depot, out_path, meta=None):
             {'' if rt['feasible'] else ' <span class="warn">⚠ 超限制</span>'}
           </div>
           <table>
-            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>到達</th><th>離開</th></tr></thead>
+            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到達</th><th>離開</th></tr></thead>
             <tbody>{stops_html}</tbody>
           </table>
         </div>"""
@@ -164,10 +175,10 @@ def build_csv(result, depot, out_path):
     rows = _eta_rows(result, depot)
     with open(out_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["路線", "車輛", "序號", "店家", "地址", "瓶數", "下貨秒數", "預計到達", "預計離開"])
+        w.writerow(["路線", "車輛", "序號", "店家", "地址", "瓶數", "品項", "下貨秒數", "預計到達", "預計離開"])
         for r in rows:
             w.writerow([r["route_no"], r["vehicle"], r["seq"], r["name"], r["address"],
-                        r["qty"], r["service_sec"], r["arrive"], r["leave"]])
+                        r["qty"], r["items"], r["service_sec"], r["arrive"], r["leave"]])
     return out_path
 
 
@@ -200,9 +211,11 @@ def build_html_grouped(result, out_path, meta=None):
         for si, s in enumerate(rt["stops"]):
             a, lv = rt["etas"][si]
             qty = int(s.demand) if s.demand == int(s.demand) else s.demand
+            item_txt = _items_str(s)
             rows_html += (
                 f"<tr><td>{si+1}</td><td><b>{s.name}</b><br><span class='addr'>{s.address}</span></td>"
                 f"<td class='num'>{qty}</td>"
+                f"<td class='num'>{item_txt or '—'}</td>"
                 f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td></tr>"
             )
         cards += f"""
@@ -212,7 +225,7 @@ def build_html_grouped(result, out_path, meta=None):
             實際里程 {rt['distance_km']:.1f} km ｜ 總瓶數 {rt['load']:.0f} ｜
             預計回到起點 {ret}（目標 17:30）{ret_tag}{fuel_txt}</div>
           <table>
-            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>到店</th><th>離店</th></tr></thead>
+            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
           </table>
         </div>"""
@@ -335,14 +348,14 @@ def build_html_per_vehicle(result, day_dir, meta=None):
 def build_csv_grouped(result, out_path):
     with open(out_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["車號", "序號", "店家", "地址", "瓶數", "下貨秒數", "預計到店", "預計離店"])
+        w.writerow(["車號", "序號", "店家", "地址", "瓶數", "品項", "下貨秒數", "預計到店", "預計離店"])
         for rt in result.routes:
             v = rt["vehicle"]
             for si, s in enumerate(rt["stops"]):
                 a, lv = rt["etas"][si]
                 qty = int(s.demand) if s.demand == int(s.demand) else s.demand
                 svc = int(round(s.service_time))
-                w.writerow([v.id, si + 1, s.name, s.address, qty, svc, _hhmm(a), _hhmm(lv)])
+                w.writerow([v.id, si + 1, s.name, s.address, qty, _items_str(s), svc, _hhmm(a), _hhmm(lv)])
     # 總計補一張摘要表(同檔下方另寫會蓋掉，這裡用第二種方式：寫入 summary 區)
     with open(out_path, "a", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -376,14 +389,14 @@ def build_dispatch_grouped(result, day_dir, meta=None):
     csvp = os.path.join(day_dir, "dispatch.csv")
     with open(csvp, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["車號", "順序", "店家", "地址", "瓶數", "下貨秒數", "預計到店", "預計離店"])
+        w.writerow(["車號", "順序", "店家", "地址", "瓶數", "品項", "下貨秒數", "預計到店", "預計離店"])
         for rt in result.routes:
             v = rt["vehicle"]
             for si, s in enumerate(rt["stops"]):
                 a, lv = rt["etas"][si]
                 qty = int(s.demand) if s.demand == int(s.demand) else s.demand
                 svc = int(round(s.service_time))
-                w.writerow([v.id, si + 1, s.name, s.address, qty, svc, _hhmm(a), _hhmm(lv)])
+                w.writerow([v.id, si + 1, s.name, s.address, qty, _items_str(s), svc, _hhmm(a), _hhmm(lv)])
         w.writerow([])
         w.writerow(["=== 派車單總計 ==="])
         w.writerow(["出車數", len(result.routes)])
@@ -409,9 +422,11 @@ def build_dispatch_grouped(result, day_dir, meta=None):
         for si, s in enumerate(rt["stops"]):
             a, lv = rt["etas"][si]
             qty = int(s.demand) if s.demand == int(s.demand) else s.demand
+            item_txt = _items_str(s)
             rows_html += (
                 f"<tr><td class='seq'>{si+1}</td><td><b>{s.name}</b><br><span class='addr'>{s.address}</span></td>"
                 f"<td class='num'>{qty}</td>"
+                f"<td class='num'>{item_txt or '—'}</td>"
                 f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td></tr>"
             )
         cards += f"""
@@ -420,7 +435,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
           <div class="card-meta">起點 {v.start_addr or '—'} ｜ {len(rt['stops'])} 站 ｜
             總瓶數 {rt['load']:.0f} ｜ 里程 {rt['distance_km']:.1f} km ｜ 回倉 {ret}（目標17:30）{tag}{fuel_txt}</div>
           <table>
-            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>到店</th><th>離店</th></tr></thead>
+            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
           </table>
         </div>"""
@@ -460,6 +475,64 @@ def build_dispatch_grouped(result, day_dir, meta=None):
     return htmlp, csvp
 
 
+# ---------- 結構化資料（供客服助理撈取 ETA/貨品） ----------
+
+def build_dispatch_data(result, out_path, meta=None):
+    """產 dispatch_data.json：每店貨品/數量/ETA/所屬車 + 每台車載貨量。
+    供客服助理讀取後通知客戶。回傳 out_path。"""
+    meta = meta or {}
+    start = meta.get("start_hour", 9.5)
+    data = {
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "start_hour": start,
+        "vehicles": [],
+        "stops": [],
+    }
+    for rt in result.routes:
+        v = rt["vehicle"]
+        # 載貨量彙總
+        agg = {}
+        milk_total = 0.0
+        for s in rt["stops"]:
+            milk_total += (s.demand or 0)
+            for n, d in (getattr(s, "items", None) or {}).items():
+                if n in agg:
+                    agg[n]["qty"] += d["qty"]
+                else:
+                    agg[n] = dict(d)
+        manifest = [{"item": "鮮奶", "qty": round(milk_total), "unit": "瓶"}]
+        manifest += [{"item": n, "qty": round(d["qty"]), "unit": d["unit"]}
+                     for n, d in agg.items()]
+        data["vehicles"].append({
+            "vehicle": v.id,
+            "start_addr": v.start_addr or "",
+            "stops_count": len(rt["stops"]),
+            "distance_km": round(rt["distance_km"], 1),
+            "load_bottles": round(rt["load"], 0),
+            "return_hour": _hhmm(rt["end_hour"]),
+            "on_time": rt.get("on_time", True),
+            "manifest": manifest,
+        })
+        for si, s in enumerate(rt["stops"]):
+            a, lv = rt["etas"][si]
+            items = [{"item": n, "qty": round(d["qty"]), "unit": d["unit"]}
+                     for n, d in (getattr(s, "items", None) or {}).items()]
+            data["stops"].append({
+                "vehicle": v.id,
+                "seq": si + 1,
+                "name": s.name,
+                "address": getattr(s, "address", ""),
+                "bottles": round(s.demand) if s.demand == int(s.demand) else s.demand,
+                "items": items,
+                "service_sec": int(round(getattr(s, "service_time", 0) or 0)),
+                "arrive": _hhmm(a),
+                "leave": _hhmm(lv),
+            })
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    return out_path
+
+
 # ---------- 整合 Excel（一份 xlsx，3 分頁） ----------
 
 def build_workbook(result, out_path, meta=None, map_png=None):
@@ -491,16 +564,16 @@ def build_workbook(result, out_path, meta=None, map_png=None):
     wb = openpyxl.Workbook()
 
     # ① 路線總表
+    # ① 路線總表
     ws1 = wb.active
-    ws1.title = "路線總表"
-    h1 = ["車號", "序號", "店家", "地址", "瓶數", "下貨秒數", "預計到店", "預計離店"]
+    h1 = ["車號", "序號", "店家", "地址", "瓶數", "品項", "下貨秒數", "預計到店", "預計離店"]
     ws1.append(h1)
     for rt in result.routes:
         v = rt["vehicle"]
         for si, s in enumerate(rt["stops"]):
             a, lv = rt["etas"][si]
             qty = int(s.demand) if s.demand == int(s.demand) else s.demand
-            ws1.append([v.id, si + 1, s.name, s.address, qty,
+            ws1.append([v.id, si + 1, s.name, s.address, qty, _items_str(s),
                         int(round(s.service_time)), _hhmm(a), _hhmm(lv)])
     _style_header(ws1); ws1.freeze_panes = "A2"; _autofit(ws1)
 
@@ -548,6 +621,33 @@ def build_workbook(result, out_path, meta=None, map_png=None):
             row.append(f"{rt.get('fuel_cost', 0):.0f}")
         ws3.append(row)
     _style_header(ws3); _autofit(ws3)
+
+    # ③b 每台車載貨量（manifest，司機早上撿貨用）
+    ws3b = wb.create_sheet("每台車載貨量")
+    ws3b.append(["車號", "品項", "數量", "單位"])
+    for rt in result.routes:
+        v = rt["vehicle"]
+        # 彙總該車所有站的非鮮奶品項 + 鮮奶總瓶數
+        agg = {}  # 品名 -> {"qty":float,"unit":str}
+        milk_total = 0.0
+        for s in rt["stops"]:
+            milk_total += (s.demand or 0)
+            for n, d in (getattr(s, "items", None) or {}).items():
+                if n in agg:
+                    agg[n]["qty"] += d["qty"]
+                else:
+                    agg[n] = dict(d)
+        # 車號小計標頭
+        r0 = ws3b.max_row + 1
+        ws3b.append([f"🚚 {v.id}｜共 {len(rt['stops'])} 站｜鮮奶 {milk_total:.0f} 瓶", "", "", ""])
+        for c in ws3b[r0]:
+            c.font = veh_font
+        ws3b[r0][0].fill = veh_fill
+        ws3b.append(["", "鮮奶(瓶數)", f"{milk_total:.0f}", "瓶"])
+        for n, d in agg.items():
+            ws3b.append(["", n, f"{d['qty']:.0f}", d["unit"]])
+        ws3b.append([])
+    _style_header(ws3b); _autofit(ws3b)
 
     # ④ 路線圖（若有 PNG）
     if map_png and os.path.exists(map_png):

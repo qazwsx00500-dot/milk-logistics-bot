@@ -1,0 +1,176 @@
+"""sales_to_dispatch.py — Ann(客服業助) 的銷貨明細轉檔工具
+
+把「隔天銷貨日報表」(如 1150720銷貨明細(中).xlsx) 整理成
+JOJO 能吃的「每日配送.xlsx」(5欄: 車號/店家名稱/店家地址/瓶數/品項)。
+
+處理規則：
+  - 工作表 '工作表2'；表頭在第 5 列(index 4)：貨單日期/貨單編號/客戶簡稱/貨品名稱/數量/單位/送貨地址
+  - 抬頭行(公司/報表名/貨單日期/製表人) 跳過
+  - 續行列：客戶與地址皆空 → 繼承上一筆的客戶+地址 (加購品項)
+  - 退貨：數量負值 → 與同店同品項銷貨相抵
+  - 同店多筆 → 按 (地址, 品項) 加總；店名取第一筆有值者
+  - 品項判定：貨品名含「鮮乳/鮮奶/牛奶」→ 計入「瓶數」；其餘 → 進「品項」欄
+  - 地址清理：去掉 '-隨貨附發票'/'-隨貨發票' 後綴再比對同店(避免同店被拆)；寫入時保留原值
+
+用法：
+  python sales_to_dispatch.py <銷貨明細.xlsx> [--out <每日配送.xlsx>] [--veh 車01]
+
+輸出每日配送.xlsx 到 路線規劃 資料夾 (與 JOJO 共用 OneDrive 路徑)。
+"""
+import os
+import re
+import argparse
+import datetime
+
+try:
+    import openpyxl
+except ImportError:
+    openpyxl = None
+
+# ---- 路徑 (與 JOJO 共用 OneDrive) ----
+ONEDRIVE_DESKTOP = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
+ROUTE_DIR = os.path.join(ONEDRIVE_DESKTOP, "路線規劃")
+
+_FRESH_MILK_HINTS = ["鮮乳", "鮮奶", "牛奶"]
+_ADDR_SUFFIX = re.compile(r"\s*[-－]\s*(隨貨附發票|隨貨發票|隨貨|附發票)\s*$")
+
+
+def _norm_addr(addr):
+    """去後綴 + 統一全半形，供同店比對。"""
+    a = (addr or "").strip()
+    a = _ADDR_SUFFIX.sub("", a)
+    a = a.replace("臺", "台").replace("　", " ").strip()
+    return a
+
+
+def _is_milk(name):
+    return any(h in (name or "") for h in _FRESH_MILK_HINTS)
+
+
+def _split_item(name, qty, unit):
+    """把一筆非鮮奶貨品轉成 (品名, 數量, 單位) 字串片段，供品項欄。"""
+    u = (unit or "").strip() or "件"
+    return f"{name}{qty:.0f}({u})"
+
+
+def convert(src_path, out_path, default_veh="車01"):
+    if openpyxl is None:
+        raise RuntimeError("請先安裝 openpyxl: uv pip install openpyxl")
+    wb = openpyxl.load_workbook(src_path, data_only=True)
+    ws = wb["工作表2"]
+    rows = [r for r in ws.iter_rows(values_only=True)]
+
+    # 表頭自動偵測：掃描含「客戶簡稱」+「送貨地址」的列（實際在第 7 列，前面是抬頭）
+    hdr_idx = None
+    for i, r in enumerate(rows):
+        cells = [str(c).strip() for c in r if c is not None and str(c).strip()]
+        if "客戶簡稱" in cells and "送貨地址" in cells:
+            hdr_idx = i
+            break
+    if hdr_idx is None:
+        raise RuntimeError("找不到表頭列（需含『客戶簡稱』與『送貨地址』）")
+    hdr = rows[hdr_idx]
+    # 欄位 index
+    idx = {name: i for i, name in enumerate(hdr) if name is not None}
+
+    def col(name):
+        return idx.get(name)
+
+    i_cust = col("客戶簡稱")
+    i_item = col("貨品名稱")
+    i_qty = col("數量")
+    i_unit = col("單位")
+    i_addr = col("送貨地址")
+
+    # 彙總結構：key=(地址,品項判定) -> record
+    # 店層: addr_key -> {name, addr_raw, milk:float, items:{品名:{"qty","unit"}}, seen_name}
+    shops = {}
+    last = {"cust": None, "addr": None}  # 續行繼承
+
+    for r in rows[hdr_idx + 1:]:
+        if all(v is None or (isinstance(v, str) and v.strip() == "") for v in r):
+            continue
+        cust = (str(r[i_cust]).strip() if i_cust is not None and r[i_cust] is not None else "")
+        addr = (str(r[i_addr]).strip() if i_addr is not None and r[i_addr] is not None else "")
+        item = (str(r[i_item]).strip() if i_item is not None and r[i_item] is not None else "")
+        qty_raw = r[i_qty] if i_qty is not None else None
+        unit = (str(r[i_unit]).strip() if i_unit is not None and r[i_unit] is not None else "")
+        try:
+            qty = float(qty_raw) if qty_raw not in (None, "") else 0.0
+        except (ValueError, TypeError):
+            qty = 0.0
+
+        # 續行列：無客戶無地址 → 繼承上一筆
+        if not cust and not addr:
+            cust = last["cust"] or ""
+            addr = last["addr"] or ""
+        else:
+            if cust:
+                last["cust"] = cust
+            if addr:
+                last["addr"] = addr
+
+        if not item or not addr:
+            continue  # 無品項或無地址，跳過
+
+        akey = _norm_addr(addr)
+        if akey not in shops:
+            shops[akey] = {
+                "name": cust or "未命名店",
+                "addr_raw": addr,
+                "milk": 0.0,
+                "items": {},
+            }
+        sh = shops[akey]
+        if cust and not sh["name"].startswith("未命名"):
+            pass  # 保留第一個店名
+        if _is_milk(item):
+            sh["milk"] += qty
+        else:
+            # 非鮮奶：進品項 dict
+            if item in sh["items"]:
+                sh["items"][item]["qty"] += qty
+            else:
+                sh["items"][item] = {"qty": qty, "unit": unit or "件"}
+
+    # 輸出
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    wb2 = openpyxl.Workbook()
+    ws2 = wb2.active
+    ws2.title = "每日配送"
+    ws2.append(["車號", "店家名稱", "店家地址", "瓶數", "品項"])
+    n = 0
+    for akey, sh in shops.items():
+        milk = sh["milk"]
+        # 品項欄文字：多品項逗號分隔
+        item_str = ", ".join(_split_item(nm, d["qty"], d["unit"]) for nm, d in sh["items"].items())
+        # 瓶數四捨五入（鮮奶可能是負值退貨相抵後的小數）
+        milk_int = int(round(milk))
+        # 退貨相抵後：牛奶 0 瓶且無其他品項 → 該店本日無貨，跳過
+        if milk_int == 0 and not item_str:
+            continue
+        ws2.append([default_veh, sh["name"], sh["addr_raw"], milk_int, item_str])
+        n += 1
+    wb2.save(out_path)
+    return n, out_path, shops
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("src", help="銷貨明細 xlsx")
+    ap.add_argument("--out", default=None, help="輸出每日配送.xlsx 路徑")
+    ap.add_argument("--veh", default="車01", help="預設車號")
+    args = ap.parse_args()
+    if args.out is None:
+        date_str = datetime.datetime.now().strftime("%Y%m%d")
+        args.out = os.path.join(ROUTE_DIR, f"每日配送_{date_str}.xlsx")
+    n, out_path, shops = convert(args.src, args.out, args.veh)
+    print(f"✅ 轉檔完成：{n} 間店 → {out_path}")
+    # 簡易摘要
+    milk_shops = sum(1 for s in shops.values() if s["milk"] != 0)
+    item_shops = sum(1 for s in shops.values() if s["items"])
+    print(f"   含鮮奶店數: {milk_shops} ｜ 含其他品項店數: {item_shops}")
+
+
+if __name__ == "__main__":
+    main()
