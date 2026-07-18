@@ -62,7 +62,9 @@ def main():
     args = ap.parse_args()
 
     base = (args.base or BASE).rstrip("/")
-    day = args.date or datetime.now().strftime("%Y-%m-%d")
+    # 預設日期用台灣時間(UTC+8)，與雲端/本機報表資料夾命名一致
+    from datetime import datetime as _dt, timedelta, timezone
+    day = args.date or (_dt.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
     dirs = {"REPORT_DIR": L.REPORT_DIR, "DISPATCH_DIR": L.DISPATCH_DIR}
 
     print(f"🔄 從 {base} 抓取 {day} 的雲端成果 …")

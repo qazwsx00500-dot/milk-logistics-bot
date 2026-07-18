@@ -27,7 +27,14 @@ import io
 import sys
 import json
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+
+
+def _today_tw():
+    """台灣時間(UTC+8)的今日日期字串 YYYY-MM-DD。
+    報表/派車單/地圖的日期資料夾統一用台灣時間，避免 Render(UTC) 與使用者(台灣)跨午夜時
+    產出的資料夾名稱與 sync_from_render 抓檔、使用者認知對不上（地圖連結失效）。"""
+    return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
 
 from flask import Flask, request, abort, send_file, Response
 
@@ -87,7 +94,7 @@ def index():
 def _today_report(which):
     """which: 'html' | 'csv' → 回傳今天報表檔路徑或 None。"""
     import logistics_agent as L
-    day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
+    day_dir = os.path.join(L.REPORT_DIR, _today_tw())
     name = "route_report.html" if which == "html" else "route_report.csv"
     p = os.path.join(day_dir, name)
     return p if os.path.exists(p) else None
@@ -113,7 +120,7 @@ def view_report_vehicle(vid):
     """單一車輛的獨立報表（含 PNG 下載按鈕，可分別轉給司機）。"""
     import logistics_agent as L
     import report as report_mod
-    day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
+    day_dir = os.path.join(L.REPORT_DIR, _today_tw())
     # vid 可能是原車號或已 safe 化，兩種都試
     safe = report_mod._safe_veh(vid)
     for name in ("route_report_" + safe + ".html", "route_report_" + vid + ".html"):
@@ -128,7 +135,7 @@ def view_report_vehicle(vid):
 def _today_dispatch(which):
     """which: 'html' | 'csv' → 回傳今天派車單檔路徑或 None。"""
     import logistics_agent as L
-    day_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    day_dir = os.path.join(L.DISPATCH_DIR, _today_tw())
     name = "dispatch.html" if which == "html" else "dispatch.csv"
     p = os.path.join(day_dir, name)
     return p if os.path.exists(p) else None
@@ -152,7 +159,7 @@ def view_dispatch_csv():
 # ---- 整合 Excel 檢視路由（3 分頁：路線總表/各車派車單/總計） ----
 def _today_workbook():
     import logistics_agent as L
-    day_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    day_dir = os.path.join(L.DISPATCH_DIR, _today_tw())
     p = os.path.join(day_dir, "整合報表.xlsx")
     return p if os.path.exists(p) else None
 
@@ -170,7 +177,7 @@ def view_workbook():
 # ---- 路線圖 PNG 檢視路由（供本機同步器抓取） ----
 def _today_map_png():
     import logistics_agent as L
-    day_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    day_dir = os.path.join(L.DISPATCH_DIR, _today_tw())
     p = os.path.join(day_dir, "route_map.png")
     return p if os.path.exists(p) else None
 
@@ -305,7 +312,7 @@ def run_plan(data_path=None, rows=None):
             return "⚠ 排程失敗：沒有可規劃的車輛/店家。請檢查 Excel 欄位。"
 
         # 產報表到 日期子資料夾
-        day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
+        day_dir = os.path.join(L.REPORT_DIR, _today_tw())
         os.makedirs(day_dir, exist_ok=True)
         report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                       meta={"start_hour": start_hour})
@@ -317,7 +324,7 @@ def run_plan(data_path=None, rows=None):
         map_png = None
 
         # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
-        dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+        dispatch_dir = os.path.join(L.DISPATCH_DIR, _today_tw())
         os.makedirs(dispatch_dir, exist_ok=True)
         report_mod.build_dispatch_grouped(result, dispatch_dir, meta={"start_hour": start_hour})
         # 結構化資料 JSON（供客服助理撈 ETA/貨品/載貨量）
@@ -366,7 +373,7 @@ def run_plan(data_path=None, rows=None):
         #    讓本機「OneDrive 同步桌面」自動出現報表（雲端跑也看得到）。
         try:
             import onedrive_sync as ods
-            if ods.upload_report_dir(day_dir, datetime.now().strftime("%Y-%m-%d")):
+            if ods.upload_report_dir(day_dir, _today_tw()):
                 lines.append(f"☁ 報表已同步至 OneDrive（本機桌面會自動出現）。")
         except Exception as e:
             print(f"⚠ OneDrive 同步失敗（不影響 LINE 回傳）: {e}")
@@ -504,7 +511,7 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     import report as report_mod
     # 產報表到 日期子資料夾
     from datetime import datetime
-    day_dir = os.path.join(L.REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
+    day_dir = os.path.join(L.REPORT_DIR, _today_tw())
     os.makedirs(day_dir, exist_ok=True)
     report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
                                   meta={"start_hour": L.DEFAULT_START_HOUR})
@@ -515,7 +522,7 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
     map_png = None
 
     # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
-    dispatch_dir = os.path.join(L.DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    dispatch_dir = os.path.join(L.DISPATCH_DIR, _today_tw())
     os.makedirs(dispatch_dir, exist_ok=True)
     if map_png:
         import shutil as _sh
@@ -677,7 +684,7 @@ def callback():
 def view_route_map():
     """當日路線地圖 (route_map.html)。"""
     import logistics_agent as L
-    day = datetime.now().strftime("%Y-%m-%d")
+    day = _today_tw()
     p = os.path.join(L.REPORT_DIR, day, "route_map.html")
     if os.path.exists(p):
         return send_file(p)

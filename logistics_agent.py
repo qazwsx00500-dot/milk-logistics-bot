@@ -678,9 +678,13 @@ def main():
         print("跳過：", "; ".join(f"{n}({r})" for n, r in skipped))
     self_check(result, args)
 
-    # 依執行日期分資料夾：REPORT_DIR/YYYY-MM-DD
-    from datetime import datetime
-    day_dir = os.path.join(REPORT_DIR, datetime.now().strftime("%Y-%m-%d"))
+    # 依執行日期分資料夾：REPORT_DIR/YYYY-MM-DD（台灣時間 UTC+8，與 LINE/同步器一致）
+    from datetime import datetime, timedelta, timezone
+
+    def _today_tw():
+        return (datetime.now(timezone.utc) + timedelta(hours=8)).strftime("%Y-%m-%d")
+
+    day_dir = os.path.join(REPORT_DIR, _today_tw())
     os.makedirs(day_dir, exist_ok=True)
 
     html = report_mod.build_html_grouped(result, os.path.join(day_dir, "route_report.html"),
@@ -697,8 +701,8 @@ def main():
     if map_png:
         print(f"🖼️ 路線圖PNG     ：{map_png}")
 
-    # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/
-    dispatch_dir = os.path.join(DISPATCH_DIR, datetime.now().strftime("%Y-%m-%d"))
+    # 派車單（每台車一份）→ 獨立 DISPATCH_DIR/日期/（台灣時間，與報表一致）
+    dispatch_dir = os.path.join(DISPATCH_DIR, _today_tw())
     os.makedirs(dispatch_dir, exist_ok=True)
     # 把路線圖 PNG 也複製到 dispatch_dir（供同步器統一抓）
     if map_png:
