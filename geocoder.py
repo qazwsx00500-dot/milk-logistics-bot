@@ -15,9 +15,10 @@ import re
 import time
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
-_HEADERS = {"User-Agent": "logistics-agent/0.1 (route planning prototype)"}
+_HEADERS = {"User-Agent": "logistics-agent/0.1 (route planning endpoint)"}
 
 _cache = {}          # address -> (lat, lon) | None
 _last_call = 0.0
@@ -111,12 +112,47 @@ def geocode(address: str):
     return None
 
 
-def geocode_many(addresses: list) -> dict:
-    """批次地理編碼，回傳 {address: (lat,lon)|None}。"""
+def geocode_many(addresses: list, max_workers: int = 8) -> dict:
+    """批次地理編碼，回傳 {address: (lat,lon)|None}。
+
+    並行化：快取命中與 Google 網路呼叫可並行（GIL 下 IO 等待重疊），
+    大幅加速首次規劃（多個新地址同時打 Google）。
+    OSM 降級路徑因 1.1s 速率限制會近似串行，但那只是少數且本就慢。
+    回傳順序與輸入對齊（dict 保留插入序）。
+    """
+    # 去重但保留順序，避免同一地址並行查兩次
+    uniq = list(dict.fromkeys(addresses))
     out = {}
-    for a in addresses:
-        out[a] = geocode(a)
-    return out
+    if not uniq:
+        return out
+    # 快取已命中的直接取，剩下並行打網路
+    pending = []
+    for a in uniq:
+        if a in _cache:
+            out[a] = _cache[a]
+        else:
+            # 先試持久化快取（不觸網）
+            try:
+                import geo_cache
+                cached = geo_cache.get_geo(a)
+                if cached:
+                    _cache[a] = cached
+                    out[a] = cached
+                    continue
+            except Exception:
+                pass
+            pending.append(a)
+    if pending:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(pending))) as ex:
+            fut_map = {ex.submit(geocode, a): a for a in pending}
+            for fut in as_completed(fut_map):
+                a = fut_map[fut]
+                try:
+                    out[a] = fut.result()
+                except Exception:
+                    out[a] = None
+    # 對齊原始輸入順序（含重複）
+    return {a: out.get(a) for a in addresses}
 
 
 def clear_cache():

@@ -205,7 +205,7 @@ def build_html_grouped(result, out_path, meta=None):
         v = rt["vehicle"]
         ret = _hhmm(rt["end_hour"])
         on_time = rt.get("on_time", True)
-        ret_tag = '<span class="ok">✅ 準時回倉</span>' if on_time else f'<span class="warn">⚠ 超過 17:30（{ret}）</span>'
+        ret_tag = '<span class="ok">✅ 準時回倉</span>' if on_time else f'<span class="warn">⚠ 超過 17:00（{ret}）</span>'
         fuel_txt = f" ｜ 油資 {rt.get('fuel_cost', 0):.0f} 元" if result.fuel_cost_per_km > 0 else ""
         rows_html = ""
         for si, s in enumerate(rt["stops"]):
@@ -223,7 +223,7 @@ def build_html_grouped(result, out_path, meta=None):
           <div class="card-h">{v.id} 路線</div>
           <div class="card-meta">起點 {v.start_addr or '—'} ｜ {len(rt['stops'])} 站 ｜
             實際里程 {rt['distance_km']:.1f} km ｜ 總瓶數 {rt['load']:.0f} ｜
-            預計回到起點 {ret}（目標 17:30）{ret_tag}{fuel_txt}</div>
+            預計回到起點 {ret}（目標 17:00）{ret_tag}{fuel_txt}</div>
           <table>
             <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
@@ -310,7 +310,7 @@ def build_html_per_vehicle(result, day_dir, meta=None):
         ret = _hhmm(rt["end_hour"])
         on_time = rt.get("on_time", True)
         ret_tag = ('<span class="ok">\u2705 \u6e96\u6642\u56de\u5009</span>' if on_time
-                   else '<span class="warn">\u26a0 \u8d85\u904e 17:30 (' + ret + ')</span>')
+                   else '<span class="warn">\u26a0 \u8d85\u904e 17:00 (' + ret + ')</span>')
         fuel_txt = ""
         if result.fuel_cost_per_km > 0:
             fuel_txt = " \uff5c \u6cb9\u8cc7 " + ("%.0f" % rt.get("fuel_cost", 0)) + " \u5143"
@@ -351,7 +351,7 @@ def build_html_per_vehicle(result, day_dir, meta=None):
                 "</div></header>" + _PNG_BTN +
                 "<div class='card'><div class='card-meta'>\u8d77\u9ede " + (v.start_addr or "\u2014") +
                 " \uff5c \u7e3d\u74f6\u6578 " + ("%.0f" % rt["load"]) +
-                " \uff5c \u9810\u8a08\u56de\u5230\u8d77\u9ede " + ret + "\uff08\u76ee\u6a19 17:30\uff09" +
+                " \uff5c \u9810\u8a08\u56de\u5230\u8d77\u9ede " + ret + "\uff08\u76ee\u6a19 17:00\uff09" +
                 ret_tag + fuel_txt + "</div><table><thead><tr><th>#</th><th>\u5e97\u5bb6 / \u5730\u5740</th>"
                 "<th class='num'>瓶數</th><th class='num'>品項</th><th class='num'>到店</th><th class='num'>離店</th></tr></thead>"
                 "<tbody>" + rows + "</tbody></table></div>" + item_summary +
@@ -388,7 +388,7 @@ def build_csv_grouped(result, out_path):
             w.writerow(["預估總油資_元", f"{result.total_fuel_cost:.0f}"])
         for rt in result.routes:
             ret = _hhmm(rt["end_hour"])
-            status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
+            status = "準時回倉" if rt.get("on_time", True) else f"超過17:00({ret})"
             w.writerow([rt["vehicle"].id, "實際里程_km", f"{rt['distance_km']:.1f}",
                         "回倉", ret, status,
                         f"油資_{rt.get('fuel_cost',0):.0f}元" if result.fuel_cost_per_km > 0 else ""])
@@ -425,7 +425,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
             w.writerow(["預估總油資_元", f"{result.total_fuel_cost:.0f}"])
         for rt in result.routes:
             ret = _hhmm(rt["end_hour"])
-            status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
+            status = "準時回倉" if rt.get("on_time", True) else f"超過17:00({ret})"
             fuel = f"油資_{rt.get('fuel_cost',0):.0f}元" if getattr(result, "fuel_cost_per_km", 0) > 0 else ""
             w.writerow([rt["vehicle"].id, "里程_km", f"{rt['distance_km']:.1f}", "回倉", ret, status, fuel])
 
@@ -435,7 +435,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
         v = rt["vehicle"]
         ret = _hhmm(rt["end_hour"])
         on_time = rt.get("on_time", True)
-        tag = '<span class="ok">✅ 準時回倉</span>' if on_time else f'<span class="warn">⚠ 超過17:30（{ret}）</span>'
+        tag = '<span class="ok">✅ 準時回倉</span>' if on_time else f'<span class="warn">⚠ 超過17:00（{ret}）</span>'
         fuel_txt = f" ｜ 油資 {rt.get('fuel_cost', 0):.0f} 元" if getattr(result, "fuel_cost_per_km", 0) > 0 else ""
         rows_html = ""
         for si, s in enumerate(rt["stops"]):
@@ -452,7 +452,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
         <div class="card">
           <div class="card-h">🚚 {v.id} 派車單</div>
           <div class="card-meta">起點 {v.start_addr or '—'} ｜ {len(rt['stops'])} 站 ｜
-            總瓶數 {rt['load']:.0f} ｜ 里程 {rt['distance_km']:.1f} km ｜ 回倉 {ret}（目標17:30）{tag}{fuel_txt}</div>
+            總瓶數 {rt['load']:.0f} ｜ 里程 {rt['distance_km']:.1f} km ｜ 回倉 {ret}（目標17:00）{tag}{fuel_txt}</div>
           <table>
             <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
@@ -603,7 +603,7 @@ def build_workbook(result, out_path, meta=None, map_png=None):
     for rt in result.routes:
         v = rt["vehicle"]
         ret = _hhmm(rt["end_hour"])
-        status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
+        status = "準時回倉" if rt.get("on_time", True) else f"超過17:00({ret})"
         fuel = f"｜油資 {rt.get('fuel_cost', 0):.0f} 元" if has_fuel else ""
         info = (f"🚚 {v.id}｜起點 {v.start_addr or '—'}｜{len(rt['stops'])}站"
                 f"｜{rt['load']:.0f}瓶｜{rt['distance_km']:.1f}km｜回倉 {ret}（{status}）{fuel}")
@@ -633,7 +633,7 @@ def build_workbook(result, out_path, meta=None, map_png=None):
     ws3.append(["車號", "站數", "里程_km", "瓶數", "回倉", "狀態"] + (["油資_元"] if has_fuel else []))
     for rt in result.routes:
         ret = _hhmm(rt["end_hour"])
-        status = "準時回倉" if rt.get("on_time", True) else f"超過17:30({ret})"
+        status = "準時回倉" if rt.get("on_time", True) else f"超過17:00({ret})"
         row = [rt["vehicle"].id, len(rt["stops"]), f"{rt['distance_km']:.1f}",
                f"{rt['load']:.0f}", ret, status]
         if has_fuel:

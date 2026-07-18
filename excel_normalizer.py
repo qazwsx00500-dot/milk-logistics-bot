@@ -255,7 +255,7 @@ def auto_assign_vehicles(rows):
     """
     來源無車號時，由 Agent 自己決定車號。
     策略：先全部併為 1 台車（車01）；
-          若 caller 發現 1 台車跑完超過 17:30 回倉，
+          若 caller 發現 1 台車跑完超過 17:00 回倉，
           再呼叫 split_by_region 按地理區域拆成多台。
     這裡回傳「全併 1 台車」版本（最保守起點），
     拆車由 plan 層回傳超時資訊後再呼叫 split_by_region。
