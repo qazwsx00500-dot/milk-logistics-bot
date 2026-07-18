@@ -550,13 +550,25 @@ def handle_file(event, file_msg) -> str:
         QuickReplyItem(action=MessageAction(label="2 台", text="2台")),
         QuickReplyItem(action=MessageAction(label="3 台", text="3台")),
     ])
+    # ★ 根治：傳檔後直接自動跑一次規劃並 Push 結果（不等選車）。
+    #   選單僅作為「可微調重跑指定台數」的附加，避免 Render serverless
+    #   兩步互動（傳檔→選車）因 worker 重啟/PENDING 遺失而收不到結果。
+    try:
+        uid = user_id_key(event)
+        plan_text = run_plan_choice(uid, "自動安排", pending)
+        _push_to(uid, plan_text)
+        # 同步給 /last_result 備援檢視（規劃結果才是主結果）
+        global LAST_RESULT
+        LAST_RESULT["ts"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        LAST_RESULT["text"] = plan_text
+    except Exception as e:
+        traceback.print_exc()
     msg = (f"📥 已收到「{fname}」\n"
            f"✅ 已自動轉成標準每日配送表（{len(rows)} 筆店家，{len(skipped)} 筆跳過）\n"
            f"🔍 轉檔自檢：{'✅ 通過' if not chk_lines else str(len(chk_lines)) + ' 項需留意'}\n")
     if chk_lines:
         msg += "\n".join(chk_lines) + "\n"
-    msg += (f"\n🔢 請選擇要安排幾台車：\n"
-            f"  • 🤖 自動安排 → 由我依時間窗(17:00回倉)決定 1~3 台\n"
+    msg += (f"\n📊 以上為「自動安排」結果。若想指定台數，點下方選單可重跑：\n"
             f"  • 指定台數 → 只求最快回倉，不限制 17:00")
     return (msg, qr)
 
