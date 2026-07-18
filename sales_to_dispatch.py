@@ -75,10 +75,57 @@ def _is_milk(name):
     return any(h in (name or "") for h in _FRESH_MILK_HINTS)
 
 
-def _split_item(name, qty, unit):
-    """把一筆非鮮奶貨品轉成 (品名, 數量, 單位) 字串片段，供品項欄。"""
-    u = (unit or "").strip() or "件"
-    return f"{name}{qty:.0f}({u})"
+# 品項單位規範（客戶 2026-07-18 指定）：依貨品名關鍵字覆寫單位。
+#   保久乳=瓶 / 糖漿類=瓶 / 紫米紅豆罐=罐 / 鳳梨果泥=包
+#   冰勃朗 不在此表 → 維持 Excel 原單位（瓶 或 箱，依表為主）
+#   其餘未列品項 → 維持 Excel 原單位（空則回退「件」）
+_UNIT_OVERRIDE = [
+    ("保久乳", "瓶"),
+    ("糖漿", "瓶"),
+    ("紫米紅豆", "罐"),
+    ("鳳梨果泥", "包"),
+]
+
+
+def _unit_for(name, unit):
+    """回傳該品項應使用的『標籤單位』。
+    - 命中 4 類強制覆寫（保久乳/糖漿/紫米紅豆/鳳梨果泥）→ 回傳指定單位
+    - 其餘（含冰勃朗）→ 回傳 Excel 原單位；若原單位空白，回傳 None 表示
+      「品名本身已含規格/單位（如 冰勃朗非氫化基底乳1KG(箱)1200000），保留 raw 不再補單位」
+    """
+    u = (unit or "").strip()
+    for kw, ov in _UNIT_OVERRIDE:
+        if kw in (name or ""):
+            return ov
+    return u or None
+
+
+# 品名中已內含的單位（認得的）→ 視為 raw 已帶單位，不再補
+_KNOWN_UNIT_IN_NAME = ("(箱)", "(瓶)", "(罐)", "(包)", "(件)")
+
+
+def _name_has_inline_unit(name):
+    """品名是否已內含單位括號（如 冰勃朗...1KG(箱)1200000 中段含 (箱)）。"""
+    return any(tok in (name or "") for tok in _KNOWN_UNIT_IN_NAME)
+
+
+def _label_item(raw_name, unit):
+    """把 Excel 原始品名字串套上『標籤單位』，回傳最終品項標籤。
+    真實資料：非鮮奶品項的數量已隱含在品名字串(批號/規格)，數量欄是廢值，
+    所以【直接以 raw_name 為基底】，只在缺單位時補標籤，絕不重組成 品名數量(單位)。
+      - raw_name 已含認得單位（含 (件)）→ 直接回傳（(件) 會被汰換成強制單位）
+      - raw_name 不含單位 → 補 (強制單位 或 Excel 原單位 或 件)
+    """
+    if raw_name is None:
+        return ""
+    rn = str(raw_name).strip()
+    if any(u in rn for u in _KNOWN_UNIT_IN_NAME):
+        if rn.endswith("(件)"):
+            new_u = _unit_for(rn, unit) or "件"
+            return rn[:-len("(件)")] + f"({new_u})"
+        return rn  # 已含 箱/瓶/罐/包，原樣保留
+    u = _unit_for(rn, unit) or (unit or "").strip() or "件"
+    return f"{rn}({u})"
 
 
 def convert(src_path, out_path, default_veh="車01"):
@@ -165,11 +212,13 @@ def convert(src_path, out_path, default_veh="車01"):
         if _is_milk(item):
             sh["milk"] += qty
         else:
-            # 非鮮奶：進品項 dict
-            if item in sh["items"]:
-                sh["items"][item]["qty"] += qty
+            # 非鮮奶：品項標籤直接以 raw 字串(含單位標籤)為 key 加總；
+            # 數量已隱含在品名內(批號/規格)，不再用數量欄重組。
+            label = _label_item(item, unit)
+            if label in sh["items"]:
+                sh["items"][label]["qty"] += qty
             else:
-                sh["items"][item] = {"qty": qty, "unit": unit or "件"}
+                sh["items"][label] = {"qty": qty, "label": label}
 
     # 輸出
     d = os.path.dirname(out_path)
@@ -182,8 +231,8 @@ def convert(src_path, out_path, default_veh="車01"):
     n = 0
     for akey, sh in shops.items():
         milk = sh["milk"]
-        # 品項欄文字：多品項逗號分隔
-        item_str = ", ".join(_split_item(nm, d["qty"], d["unit"]) for nm, d in sh["items"].items())
+        # 品項欄文字：多品項逗號分隔；直接用品項標籤(raw+單位標籤)
+        item_str = ", ".join(d["label"] for d in sh["items"].values())
         # 瓶數四捨五入（鮮奶可能是負值退貨相抵後的小數）
         milk_int = int(round(milk))
         # 退貨相抵後：牛奶 <=0 瓶且無其他品項 → 該店本日無貨(取消訂單)，跳過
@@ -205,7 +254,7 @@ def self_check(shops):
     n_out = 0
     for akey, sh in shops.items():
         milk = int(round(sh["milk"]))
-        item_str = ", ".join(_split_item(nm, d["qty"], d["unit"]) for nm, d in sh["items"].items())
+        item_str = ", ".join(d["label"] for d in sh["items"].values())
         if milk <= 0 and not item_str:
             continue  # 取消訂單(相抵0/純退貨) 正常跳過
         n_out += 1
