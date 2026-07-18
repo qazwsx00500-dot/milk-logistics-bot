@@ -535,23 +535,40 @@ def self_check(result, args=None):
     if back_warn:
         issues.append("⚠ 回倉時間異常：" + "; ".join(back_warn))
 
-    # 5) 路線最佳化：用 multi-restart 2-opt（多隨機種子取最小）獨立重優化，
-    #    跟 solve_grouped 產出的現有順序比。若還能降 >5% 行車 → 路線未充分最佳化。
-    #    （單次 2-opt 太弱、連明顯繞遠都解不開，故用 multi-restart 做有意義的交叉驗證）
+    # 5) 路線最佳化：用 multi-restart 2-opt 獨立重優化，跟 solve_grouped 產出的現有順序比。
+    #    若還能降 >5% 行車 → 路線未充分最佳化。
+    #    ⚠️ 必須在「與 solver 相同的距離維度」上做交叉驗證：solver 優化用的是真實道路矩陣
+    #       (Google/OSRM 快取)，若這裡改用 haversine 直線評估會維度不一致、誤報。
+    #       故從快取重建真實矩陣（0 Google 呼叫）再跑 multi-restart 當對照。
     try:
         import random
-        from route_planner import Stop as _Stop, _Dist as _DistR, _route_duration_sec, _two_opt  # noqa
+        from route_planner import Stop as _Stop, _Dist as _DistR, _route_duration_sec, _two_opt, _multi_restart_two_opt  # noqa
         opt_warn = []
         for rt in result.routes:
             v = rt["vehicle"]; stops = rt["stops"]
             if len(stops) < 4:
                 continue
             nodes = [_Stop("START", v.start_addr or "起點", v.start_lat, v.start_lon)] + list(stops)
-            dist = _DistR(nodes)
             n = len(nodes)
             ordered = list(range(1, n))  # rt["stops"] 已是規劃後順序
+            # 重建該車真實矩陣（use_google=True 會優先命中快取、0 Google 呼叫）— 與 solver 同維度
+            m_km = None; m_dur = None
+            try:
+                vehicles_1 = [v]
+                sbv_1 = {v.id: stops}
+                km_full, dur_full, _ = build_matrices(vehicles_1, sbv_1, use_google=True, no_google=False)
+                k = len(stops)
+                m_km = [[0.0] * (k + 1) for _ in range(k + 1)]
+                m_dur = [[0.0] * (k + 1) for _ in range(k + 1)]
+                for i in range(k + 1):
+                    for j in range(k + 1):
+                        m_km[i][j] = km_full.get((v.id, i, j), 0.0)
+                        m_dur[i][j] = dur_full.get((v.id, i, j), 0.0)
+            except Exception:
+                m_km = None; m_dur = None
+            dist = _DistR(nodes, m_km, m_dur)
             cur_sec = _route_duration_sec(dist, 0, ordered)
-            # multi-restart：8 個隨機種子各跑 2-opt，取最小行車秒
+            # multi-restart：8 個隨機種子各跑 2-opt，取最小行車秒（獨立交叉驗證）
             best_sec = cur_sec
             for seed in range(8):
                 rnd = list(range(1, n))
@@ -563,7 +580,7 @@ def self_check(result, args=None):
         if opt_warn:
             issues.append("⚠ 路線可能未充分最佳化（multi-restart 仍可降 >5% 行車）：" + "; ".join(opt_warn))
         else:
-            print("   ⑤ 路線最佳化：各車順序已接近最優（multi-restart 交叉驗證）")
+            print("   ⑤ 路線最佳化：各車順序已接近最優（multi-restart 交叉驗證，同維度真實矩陣）")
     except Exception as e:
         print(f"   ⑤ 路線最佳化檢查跳過（{e}）")
 

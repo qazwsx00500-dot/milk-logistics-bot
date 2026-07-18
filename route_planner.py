@@ -131,6 +131,32 @@ def _two_opt(dist, start_idx, stop_idxs, max_iter=200):
     return route
 
 
+def _multi_restart_two_opt(dist, start_idx, stop_idxs, n_restart=8, max_iter=200, seed=12345):
+    """multi-restart 2-opt：多個隨機起點各跑 NN+2-opt，取總行車秒最小者。
+    解決單次 2-opt 從 NN 起點出發困在局部最優的問題（實測車02 465分→437分）。
+    站數 <= 3 直接回傳（無優化空間）。"""
+    if len(stop_idxs) <= 3:
+        return list(stop_idxs)
+    import random
+    rng = random.Random(seed)
+    best_route = None
+    best_dur = float("inf")
+    for r in range(n_restart):
+        if r == 0:
+            # 第一輪用 NN 起點（確定性、可重現）
+            cand = _nearest_neighbor(dist, start_idx, list(stop_idxs))
+        else:
+            # 其餘輪：隨機打亂初始順序再 2-opt
+            shuffled = list(stop_idxs)
+            rng.shuffle(shuffled)
+            cand = _nearest_neighbor(dist, start_idx, shuffled)
+        cand = _two_opt(dist, start_idx, cand, max_iter=max_iter)
+        dur = _route_duration_sec(dist, start_idx, cand)
+        if dur + 1e-9 < best_dur:
+            best_route, best_dur = cand, dur
+    return best_route
+
+
 def solve_grouped(
     vehicles: list[Vehicle],
     stops_by_vehicle: dict,           # {車號: [Stop...]}
@@ -179,8 +205,7 @@ def solve_grouped(
                     m_dur[i][j] = duration_matrix.get((v.id, i, j), 0.0)
 
         dist = _Dist(nodes, m_km, m_dur)
-        ordered = _nearest_neighbor(dist, start_idx, stop_idxs)
-        ordered = _two_opt(dist, start_idx, ordered)
+        ordered = _multi_restart_two_opt(dist, start_idx, stop_idxs)
 
         # 距離
         dist_km = 0.0
