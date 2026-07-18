@@ -115,11 +115,20 @@ def view_report_csv():
     return Response("尚未產生報表。", mimetype="text/plain; charset=utf-8")
 
 
+def _fix_vid(vid):
+    """Render(gunicorn) 預設 ascii 環境下，中文 URL 段會以 latin-1 解碼，
+    導致 '車' 等中文字炸 UnicodeEncodeError。統一還原成 utf-8。"""
+    try:
+        return vid.encode("latin-1").decode("utf-8")
+    except Exception:
+        return vid
+
 @app.route("/report/<vid>", methods=["GET"])
 def view_report_vehicle(vid):
     """單一車輛的獨立報表（含 PNG 下載按鈕，可分別轉給司機）。"""
     import logistics_agent as L
     import report as report_mod
+    vid = _fix_vid(vid)
     day_dir = os.path.join(L.REPORT_DIR, _today_tw())
     # vid 可能是原車號或已 safe 化，兩種都試
     safe = report_mod._safe_veh(vid)
@@ -712,9 +721,10 @@ def view_route_map():
 def view_route_map_vehicle(vid):
     """各車獨立路線地圖 (route_map_<safe車號>.html)。"""
     import logistics_agent as L
+    import report as _report_mod
+    vid = _fix_vid(vid)
     day = _today_tw()
     # 先試 safe 化後的車號檔名；再試原值 safe 化（與 build_map 的 _safe_veh 對齊）
-    import report as _report_mod
     safe = _report_mod._safe_veh(vid)
     for cand in (safe, vid, _report_mod._safe_veh(vid)):
         p = os.path.join(L.REPORT_DIR, day, "route_map_%s.html" % cand)
