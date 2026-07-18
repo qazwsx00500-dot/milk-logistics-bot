@@ -26,6 +26,7 @@ import re
 import io
 import sys
 import json
+import subprocess as _sp
 import traceback
 from datetime import datetime, timedelta, timezone
 
@@ -88,6 +89,25 @@ blob_api = MessagingApiBlob(ApiClient(configuration))
 @app.route("/", methods=["GET"])
 def index():
     return "OK - 鮮奶物流 LINE Bot 運作中", 200
+
+
+def _git_head():
+    """回傳當前 git HEAD 短 hash（部署在 Render 時能確認線上跑哪版）。"""
+    try:
+        return _sp.check_output(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=os.path.dirname(os.path.abspath(__file__)),
+            stderr=_sp.DEVNULL).decode().strip()
+    except Exception:
+        return "unknown"
+
+@app.route("/version", methods=["GET"])
+def view_version():
+    # 版本號與 deployment 標記；改動後 push 即更新，方便確認線上是否為最新
+    return Response(
+        f"version=2026-07-18b | git={_git_head()} | "
+        f"target_return=17:00 | geocode=parallel",
+        mimetype="text/plain; charset=utf-8")
 
 
 # ---- 報表檢視路由（直接讀今天日期資料夾的檔案） ----
