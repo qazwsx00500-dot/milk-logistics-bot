@@ -30,7 +30,7 @@ DEPOT = Stop("DEPOT", f"總倉 ({DEPOT_ADDR})", 0.0, 0.0, address=DEPOT_ADDR)
 
 # 出車時間與目標回倉
 DEFAULT_START_HOUR = 9.5        # 司機正常出車 09:30
-TARGET_RETURN_HOUR = 17.5       # 目標下午 17:30 回到倉庫
+TARGET_RETURN_HOUR = 17.0       # 目標下午 17:00 回到倉庫
 
 # 預設資料/報表資料夾：使用者的 OneDrive 桌面「路線規劃」
 # (你的桌面是 OneDrive 同步桌面，故預設指向此路徑，方便直接在桌面操作)
@@ -253,7 +253,7 @@ def plan(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0):
         distance_source=source, start_hour=start_hour,
         fuel_cost_per_km=fuel_cost_per_km,
     )
-    # 目標回倉標註：每台車預計回倉是否 <= 17:30
+    # 目標回倉標註：每台車預計回倉是否 <= 17:00
     for rt in result.routes:
         rt["return_hour"] = rt.get("end_hour", 0)
         rt["on_time"] = rt["return_hour"] <= TARGET_RETURN_HOUR
@@ -265,7 +265,7 @@ def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per
                       max_vehicles=3, force_vehicles=None):
     """無車號時的單輪自動分車：全站只打「一次」真實距離矩陣，
     拆群(1→3台)時直接從同一次矩陣切出子矩陣複用，避免重複打 Google/OSRM。
-    force_vehicles: 指定車數(如 2) → 強制分剛好 N 台，且忽略 17:30 時間窗
+    force_vehicles: 指定車數(如 2) → 強制分剛好 N 台，且忽略 17:00 時間窗
                     （只求各車最快回倉、最短路線）。None=由 Agent 自動決定。
     """
     here = os.path.dirname(os.path.abspath(__file__))
@@ -370,7 +370,7 @@ def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per
         n = len(coords)
         m_ij = {(i, j): matrix_km_full[(FULL, i, j)] for i in range(n) for j in range(n)}
         d_ij = {(i, j): duration_matrix_full[(FULL, i, j)] for i in range(n) for j in range(n)}
-    # 指定車數模式：強制剛好 N 台，且忽略 17:30 時間窗（只求最快回倉/最短路線）
+    # 指定車數模式：強制剛好 N 台，且忽略 17:00 時間窗（只求最快回倉/最短路線）
     if force_vehicles:
         fk = max(1, min(int(force_vehicles), max_vehicles, len(all_stops)))
         target = 99.0   # 極大值 → 不算時間窗，純追求最短路線/最快回倉
@@ -599,8 +599,8 @@ def main():
     ap.add_argument("--straight", action="store_true", help="強制直線距離/估速")
     ap.add_argument("--no-google", action="store_true", help="暫不走 Google，改 OSRM")
     ap.add_argument("--start", type=float, default=DEFAULT_START_HOUR, help="出發時間(24h, 預設9.5=09:30)")
-    ap.add_argument("--auto", action="store_true", help="強制自動分車：忽略 Excel 車號欄，依 17:30 回倉自動分成多台車（最多3台）")
-    ap.add_argument("--vehicles", type=int, default=None, help="搭配 --auto：強制分剛好 N 台車（忽略 17:30 時間窗，只求最短路線）")
+    ap.add_argument("--auto", action="store_true", help="強制自動分車：忽略 Excel 車號欄，依 17:00 回倉自動分成多台車（最多3台）")
+    ap.add_argument("--vehicles", type=int, default=None, help="搭配 --auto：強制分剛好 N 台車（忽略 17:00 時間窗，只求最短路線）")
     ap.add_argument("--excel", action="store_true",
                    help="額外產出整合 Excel（整合報表.xlsx，含路線圖分頁）。預設不產，需時再加此開關")
     args = ap.parse_args()

@@ -482,14 +482,12 @@ def run_plan(data_path=None, rows=None):
         else:
             lines.append(f"\n📁 報表已產出：{day_dir}")
 
-        # ☁ 若設了 OneDrive 憑證，把報表同步上傳到 OneDrive，
-        #    讓本機「OneDrive 同步桌面」自動出現報表（雲端跑也看得到）。
-        try:
-            import onedrive_sync as ods
-            if ods.upload_report_dir(day_dir, _today_tw()):
-                lines.append(f"☁ 報表已同步至 OneDrive（本機桌面會自動出現）。")
-        except Exception as e:
-            print(f"⚠ OneDrive 同步失敗（不影響 LINE 回傳）: {e}")
+        # 📥 本機存檔（OneDrive 同步桌面）改由 ANN 負責，不再由 JOJO 自己上傳。
+        #    JOJO 的職權：跑完路線規劃 → 在 LINE 回傳結果給傑夫 → 把成果複本
+        #    留在 Render 雲端端點(/report /dispatch /route_map /workbook) → 停止、等待下一次分配。
+        #    ANN 另跑 ann_archive.py 把這些複本抓回本機 OneDrive 桌面存檔並產整合 Excel。
+        #    （成員間只透過共用資料/API 協作，不直接互改彼此程式碼，見 TEAM.md）
+        lines.append(f"📥 本機存檔由 ANN 處理：ANN 會把成果複本抓回桌面『當日車輛報表/派車單』並產整合 Excel。")
 
         # 🔍 產出自動複檢：把 self_check 的終端輸出轉成 LINE 文字附上，
         #    讓手機端也能看到 ①~⑤ 檢查結果與 ⛔ 警告（本機 CLI 已有，這裡補齊 LINE 路徑）。

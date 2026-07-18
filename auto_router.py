@@ -2,7 +2,7 @@
 auto_router.py — 依「時間窗 + 最短距離」自動分配車輛路線
 
 規則（來自使用者）：
-  1. 每台車 09:30 出車、17:30 回倉（8 小時工作窗）
+  1. 每台車 09:30 出車、17:00 回倉（7.5 小時工作窗）
   2. 路線時間超過 → 自動多分配一台車
   3. 每條路線必須是最短行車距離（NN + 2-opt 已在 route_planner 做）
   4. 最多 3 條路線；一台跑不完才加下一台
@@ -78,7 +78,7 @@ def estimate_route_end_hour(stops, depot, start_hour=9.5, est_speed_kmh=30.0):
     return t / 3600.0
 
 
-def decide_groups(stops, depot, start_hour=9.5, target_return=17.5, max_vehicles=3,
+def decide_groups(stops, depot, start_hour=9.5, target_return=17.0, max_vehicles=3,
                   precomputed_end_hour=None, est_speed_kmh=30.0):
     """依時間窗決定分幾群。回傳 list of list（每群是 stop 索引）。
     原則：先試 1 台；超時才加車，最多 max_vehicles 台。
@@ -226,7 +226,7 @@ def _rebalance_balanced(groups, stops, depot, start_hour,
     return groups
 
 
-def balanced_groups(stops, depot, start_hour=9.5, target_return=17.5, max_vehicles=3,
+def balanced_groups(stops, depot, start_hour=9.5, target_return=17.0, max_vehicles=3,
                     matrix=None, duration=None, est_speed_kmh=30.0, force_k=None):
     """時間窗驅動的均衡分車：儘量讓每群 ≤ 目標回倉時間。
 
@@ -294,7 +294,7 @@ def balanced_groups(stops, depot, start_hour=9.5, target_return=17.5, max_vehicl
         return best_g, best_s
 
     if force_k is not None:
-        # 指定台數模式：直接回傳剛好 force_k 台（均衡分配，忽略17:30時間窗）
+        # 指定台數模式：直接回傳剛好 force_k 台（均衡分配，忽略17:00時間窗）
         g, s = _try_k(force_k)
         return g
 

@@ -36,7 +36,7 @@ from datetime import datetime, timedelta
 try:
     from logistics_agent import TARGET_RETURN_HOUR
 except Exception:
-    TARGET_RETURN_HOUR = 17.5  # 回退值（主程式已設 17.5=17:30）
+    TARGET_RETURN_HOUR = 17.0  # 回退值（主程式已設 17.0=17:00）
 
 
 def _hhmm(hour_float):
