@@ -52,6 +52,26 @@ def _items_str(stop):
     return ", ".join(f"{n}{v['qty']:.0f}({v['unit']})" for n, v in items.items())
 
 
+def _veh_items_summary(rt):
+    """回傳本車『載貨品項總數』HTML 區塊（鮮奶瓶數 + 非鮮奶品項彙總），供總表/各車報表共用。"""
+    veh_items = {}  # 品名 -> {qty, unit}
+    for sp in rt["stops"]:
+        items = getattr(sp, "items", None) or {}
+        for nm, d in items.items():
+            if nm not in veh_items:
+                veh_items[nm] = {"qty": 0.0, "unit": d.get("unit", "")}
+            veh_items[nm]["qty"] += float(d.get("qty", 0))
+    # 總瓶數（鮮奶）
+    milk = rt.get("load", 0) or 0
+    rows_html = f"<tr><td>🥛 鮮奶(瓶數)</td><td class='num'>{milk:.0f}</td><td>瓶</td></tr>"
+    for nm, d in sorted(veh_items.items()):
+        rows_html += (f"<tr><td>{nm}</td><td class='num'>{d['qty']:.0f}</td>"
+                      f"<td>{d['unit'] or ''}</td></tr>")
+    return ("<div class='card'><div class='card-meta'>📦 本車載貨品項總數（司機核對用）</div>"
+            "<table><thead><tr><th>品項</th><th class='num'>數量</th><th>單位</th></tr></thead>"
+            f"<tbody>{rows_html}</tbody></table></div>")
+
+
 def _eta_rows(result, depot):
     """把所有路線攤平成逐站報表列。"""
     rows = []
@@ -228,6 +248,7 @@ def build_html_grouped(result, out_path, meta=None):
             <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
           </table>
+          {_veh_items_summary(rt)}
         </div>"""
 
     skipped = getattr(result, "skipped", [])
@@ -315,7 +336,6 @@ def build_html_per_vehicle(result, day_dir, meta=None):
         if result.fuel_cost_per_km > 0:
             fuel_txt = " \uff5c \u6cb9\u8cc7 " + ("%.0f" % rt.get("fuel_cost", 0)) + " \u5143"
         rows = ""
-        veh_items = {}  # 本車載貨品項總數: 品名 -> (qty, unit)
         for si, sp in enumerate(rt["stops"]):
             a, lv = rt["etas"][si]
             qty = int(sp.demand) if sp.demand == int(sp.demand) else sp.demand
@@ -325,22 +345,8 @@ def build_html_per_vehicle(result, day_dir, meta=None):
                      "<td class='num'>" + (_items_str(sp) or "—") + "</td>"
                      "<td class='num'>" + _hhmm(a) +
                      "</td><td class='num'>" + _hhmm(lv) + "</td></tr>")
-            # 彙總本車非鮮奶品項
-            items = getattr(sp, "items", None) or {}
-            for nm, d in items.items():
-                if nm not in veh_items:
-                    veh_items[nm] = {"qty": 0.0, "unit": d.get("unit", "")}
-                veh_items[nm]["qty"] += float(d.get("qty", 0))
-        # 本車載貨品項總數區塊 (給司機核對載貨)
-        item_summary = ""
-        if veh_items:
-            item_rows = "".join(
-                "<tr><td>" + nm + "</td><td class='num'>" + ("%.0f" % d["qty"]) +
-                "</td><td>" + (d["unit"] or "") + "</td></tr>"
-                for nm, d in sorted(veh_items.items()))
-            item_summary = ("<div class='card'><div class='card-meta'>📦 本車載貨品項總數（司機核對用）</div>"
-                            "<table><thead><tr><th>品項</th><th class='num'>數量</th><th>單位</th></tr></thead>"
-                            "<tbody>" + item_rows + "</tbody></table></div>")
+        # 本車載貨品項總數區塊（與總表共用 _veh_items_summary）
+        item_summary = _veh_items_summary(rt)
         html = ("<!DOCTYPE html><html lang='zh-TW'><head><meta charset='utf-8'>"
                 "<meta name='viewport' content='width=device-width, initial-scale=1'>"
                 "<title>" + str(v.id) + " \u914d\u9001\u5831\u8868</title>" + css + "</head>"

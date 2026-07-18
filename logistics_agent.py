@@ -760,7 +760,9 @@ def build_map(result, here, use_google, per_vehicle=True):
     from concurrent.futures import ThreadPoolExecutor
     def _fetch_one(item):
         rt, v, color, points = item
-        line = get_route_geometry(points)
+        # timeout 縮短為 15s：地圖是輔助，不該讓 OSRM 在弱環境(Render免費版)拖垮主流程；
+        # 逾時自動退回直線折線，規劃結果不受影響。
+        line = get_route_geometry(points, timeout=15)
         if not line:
             line = [[a, b] for a, b in points]   # 退回直線
         return rt, v, color, points, line
