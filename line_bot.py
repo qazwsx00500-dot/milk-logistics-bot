@@ -144,6 +144,36 @@ def _fix_vid(vid):
         return vid
 
 
+def _resolve_vid_file(vid, day_dir, prefix):
+    """把 URL 裡的 vid 解析成實際檔案路徑。
+
+    - 短網址 vN（N=1,2,3...）：從 day_dir 的 {prefix}_*.html 依檔名排序取第 N-1 個
+      （穩定對應：產報表順序 = 車輛順序），避免中文車號 URL 編碼過長。
+    - 舊網址（原車號 / _safe_veh 後車號）：向後相容，直接試。
+    回傳檔案路徑或 None。
+    """
+    import re as _re
+    # 短網址 vN
+    m = _re.fullmatch(r"v(\d+)", vid)
+    if m:
+        n = int(m.group(1))
+        files = sorted(
+            f for f in os.listdir(day_dir)
+            if f.startswith(prefix + "_") and f.endswith(".html")
+        )
+        if 1 <= n <= len(files):
+            return os.path.join(day_dir, files[n - 1])
+        return None
+    # 舊網址相容
+    import report as report_mod
+    safe = report_mod._safe_veh(vid)
+    for name in (prefix + "_" + safe + ".html", prefix + "_" + vid + ".html"):
+        fp = os.path.join(day_dir, name)
+        if os.path.exists(fp):
+            return fp
+    return None
+
+
 def _persist_cache_to_git():
     """跑完規劃後，把累積的快取(geo_cache.json/matrix_cache.json)自動 push 回 GitHub。
     根因：Render 免費容器每次部署會清空硬碟 → 雲端快取每次都從零開始 →
@@ -199,17 +229,13 @@ def _persist_cache_to_git():
 
 @app.route("/report/<vid>", methods=["GET"])
 def view_report_vehicle(vid):
-    """單一車輛的獨立報表（含 PNG 下載按鈕，可分別轉給司機）。"""
+    """單一車輛的獨立報表（含 PNG 下載按鈕，可分別轉給司機）。支援短網址 vN 與舊車號網址。"""
     import logistics_agent as L
-    import report as report_mod
     vid = _fix_vid(vid)
     day_dir = os.path.join(L.REPORT_DIR, _today_tw())
-    # vid 可能是原車號或已 safe 化，兩種都試
-    safe = report_mod._safe_veh(vid)
-    for name in ("route_report_" + safe + ".html", "route_report_" + vid + ".html"):
-        fp = os.path.join(day_dir, name)
-        if os.path.exists(fp):
-            return send_file(fp)
+    fp = _resolve_vid_file(vid, day_dir, "route_report")
+    if fp:
+        return send_file(fp)
     return Response("找不到該車報表。請先在 LINE 傳 Excel 或『跑』觸發規劃。",
                     mimetype="text/plain; charset=utf-8")
 
@@ -447,10 +473,10 @@ def run_plan(data_path=None, rows=None):
             lines.append(f"🗺️ 地圖（總圖）：{PUBLIC_URL}/route_map")
             lines.append("   ※ 地圖頁內含「📥 下載地圖 PNG」按鈕，手機/電腦可直接存圖")
             lines.append("🚚 各車獨立報表（可分別轉給司機，可下載PNG）：")
-            for rt in result.routes:
+            for i, rt in enumerate(result.routes, 1):
                 vid = rt["vehicle"].id
-                lines.append(f"  ・{vid} 報表：{PUBLIC_URL}/report/{report_mod._safe_veh(vid)}")
-                lines.append(f"  ・{vid} 路線圖：{PUBLIC_URL}/route_map/{report_mod._safe_veh(vid)}")
+                lines.append(f"  ・{vid} 報表：{PUBLIC_URL}/report/v{i}")
+                lines.append(f"  ・{vid} 路線圖：{PUBLIC_URL}/route_map/v{i}")
         else:
             lines.append(f"\n📁 報表已產出：{day_dir}")
 
@@ -680,10 +706,11 @@ def _format_result(result, skipped, fuel_cost, mode_note, public_url):
         lines.append(f"🗺️ 地圖（總圖）：{public_url}/route_map")
         lines.append("   ※ 地圖頁內含「📥 下載地圖 PNG」按鈕，手機/電腦可直接存圖")
         lines.append("🚚 各車獨立報表（可分別轉給司機，可下載PNG）：")
-        for rt in result.routes:
+        for i, rt in enumerate(result.routes, 1):
             vid = rt["vehicle"].id
-            lines.append(f"  ・{vid} 報表：{public_url}/report/{report_mod._safe_veh(vid)}")
-            lines.append(f"  ・{vid} 路線圖：{public_url}/route_map/{report_mod._safe_veh(vid)}")
+            # 短網址：用穩定序號 v1/v2/v3（避免中文車號 URL 編碼過長）
+            lines.append(f"  ・{vid} 報表：{public_url}/report/v{i}")
+            lines.append(f"  ・{vid} 路線圖：{public_url}/route_map/v{i}")
     else:
         lines.append(f"\n📁 報表已產出：{day_dir}")
 
@@ -882,17 +909,14 @@ def view_route_map():
 
 @app.route("/route_map/<vid>", methods=["GET"])
 def view_route_map_vehicle(vid):
-    """各車獨立路線地圖 (route_map_<safe車號>.html)。"""
+    """各車獨立路線地圖 (route_map_<safe車號>.html)。支援短網址 vN 與舊車號網址。"""
     import logistics_agent as L
-    import report as _report_mod
     vid = _fix_vid(vid)
     day = _today_tw()
-    # 先試 safe 化後的車號檔名；再試原值 safe 化（與 build_map 的 _safe_veh 對齊）
-    safe = _report_mod._safe_veh(vid)
-    for cand in (safe, vid, _report_mod._safe_veh(vid)):
-        p = os.path.join(L.REPORT_DIR, day, "route_map_%s.html" % cand)
-        if os.path.exists(p):
-            return send_file(p)
+    day_dir = os.path.join(L.REPORT_DIR, day)
+    fp = _resolve_vid_file(vid, day_dir, "route_map")
+    if fp:
+        return send_file(fp)
     return Response("尚無該車路線地圖。請先傳 Excel 觸發規劃。", mimetype="text/plain; charset=utf-8")
 
 
