@@ -17,7 +17,7 @@ logistics_agent.py — 鮮奶物流「分組路線規劃」Agent
 import os
 import argparse
 
-from route_planner import Stop, Vehicle, solve_grouped, _hhmm
+from route_planner import Stop, Vehicle, solve_grouped, solve_grouped_regional, _hhmm
 from data_loader import load
 import report as report_mod
 from google_maps import distance_matrix as g_distance_matrix
@@ -266,7 +266,12 @@ def plan(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0):
     except Exception:
         pass
 
-    result = solve_grouped(
+    result = solve_grouped_regional(
+        vehicles, stops_by_vehicle,
+        matrix_km=matrix_km, duration_matrix=duration_matrix,
+        distance_source=source, start_hour=start_hour,
+        fuel_cost_per_km=fuel_cost_per_km,
+    ) if os.environ.get("REGION_ORDER", "1") != "0" else solve_grouped(
         vehicles, stops_by_vehicle,
         matrix_km=matrix_km, duration_matrix=duration_matrix,
         distance_source=source, start_hour=start_hour,
@@ -447,7 +452,8 @@ def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per
                     gn_j = local_to_global[lj]
                     km_local[(veh_id, li, lj)] = matrix_km_full[(FULL, gn_i, gn_j)]
                     dur_local[(veh_id, li, lj)] = duration_matrix_full[(FULL, gn_i, gn_j)]
-        res = solve_grouped([new_vehicles[gi - 1]], {veh_id: sub},
+        res = (solve_grouped_regional if os.environ.get("REGION_ORDER", "1") != "0"
+               else solve_grouped)([new_vehicles[gi - 1]], {veh_id: sub},
                             matrix_km=km_local, duration_matrix=dur_local,
                             distance_source=source, start_hour=start_hour,
                             fuel_cost_per_km=fuel_cost_per_km)

@@ -219,6 +219,161 @@ def _constraint_sort(stops, ordered, start_hour, dist, start_idx=0):
     return best_route
 
 
+def _region_of(addr):
+    """從地址解析『區/鎮/市』層級的聚簇 key（比縣市更細，符合『一區跑完再下一區』）。
+    例：台中市西屯區中工三路 → '西屯區'；苗栗縣竹南鎮新生路 → '竹南鎮'。
+    抓不到區則退回前兩段（縣市+剩餘）避免全併成一團。"""
+    import re
+    a = addr or ""
+    # 先去掉縣市前綴（台中市/苗栗縣...），再抓區/鎮/市
+    a2 = re.sub(r"^(台[北中高][市縣]|苗栗縣|彰化縣|雲林縣|嘉義縣|南投縣)", "", a)
+    # 區（如 西屯區/北區/東區/太平區/烏日區/豐原區）
+    m = re.search(r"(.+?區)", a2)
+    if m:
+        return m.group(1)
+    # 鎮 / 市（如 竹南鎮/頭份市/苑裡鎮/卓蘭鎮/通霄鎮）
+    m = re.search(r"(.+?鎮|.+?市)", a2)
+    if m:
+        return m.group(1)
+    # 兜底：前兩段
+    parts = [p for p in re.split(r"[市縣]", a) if p]
+    return parts[0][:4] if parts else a[:6]
+
+
+def solve_grouped_regional(
+    vehicles: list[Vehicle],
+    stops_by_vehicle: dict,
+    matrix_km: dict = None,
+    duration_matrix: dict = None,
+    distance_source: str = "haversine",
+    start_hour: float = 8.0,
+    fuel_cost_per_km: float = 0.0,
+) -> PlanResult:
+    """區域聚簇版：同區(里/區/鎮)站綁成一團，區間按真實距離 NN 排序拜訪，
+    區內仍用 _multi_restart_two_opt 排最短路徑（折衷：跨區不跳、區內最順）。
+    其餘產出結構與 solve_grouped 完全一致。"""
+    result = PlanResult()
+    result.distance_source = distance_source
+    result.fuel_cost_per_km = fuel_cost_per_km
+    total_dist = 0.0
+    total_load = 0.0
+    total_fuel = 0.0
+
+    for v in vehicles:
+        stops = stops_by_vehicle.get(v.id, [])
+        if not stops:
+            continue
+        nodes = [Stop("START", v.start_addr or "起點", v.start_lat, v.start_lon)] + list(stops)
+        start_idx = 0
+        stop_idxs = list(range(1, len(nodes)))
+
+        # 該車矩陣
+        m_km = None
+        m_dur = None
+        if matrix_km is not None:
+            n = len(stops)
+            m_km = [[0.0] * (n + 1) for _ in range(n + 1)]
+            for i in range(n + 1):
+                for j in range(n + 1):
+                    m_km[i][j] = matrix_km.get((v.id, i, j), 0.0)
+        if duration_matrix is not None:
+            n = len(stops)
+            m_dur = [[0.0] * (n + 1) for _ in range(n + 1)]
+            for i in range(n + 1):
+                for j in range(n + 1):
+                    m_dur[i][j] = duration_matrix.get((v.id, i, j), 0.0)
+        dist = _Dist(nodes, m_km, m_dur)
+
+        # --- 區域聚簇 ---
+        # 每站所屬區
+        region_of_idx = {}
+        for k in stop_idxs:
+            region_of_idx[k] = _region_of(nodes[k].address)
+        # 依出現順序分組（保證可重現）
+        regions_order = []
+        region_stops = {}
+        for k in stop_idxs:
+            r = region_of_idx[k]
+            if r not in region_stops:
+                region_stops[r] = []
+                regions_order.append(r)
+            region_stops[r].append(k)
+
+        # 區間拜訪順序：從起點開始，對「尚未拜訪的區」取「距離最短的該區重心」
+        # 重心 = 區內第一個站（近似即可，區間是粗粒度排序）
+        visited_regions = set()
+        region_seq = []
+        cur = start_idx
+        while len(visited_regions) < len(regions_order):
+            best_r, best_k, best_d = None, None, float("inf")
+            for r in regions_order:
+                if r in visited_regions:
+                    continue
+                # 用該區第一個站當代表點算距離
+                rep = region_stops[r][0]
+                d = dist.t(cur, rep)
+                if d < best_d:
+                    best_d, best_r, best_k = d, r, rep
+            region_seq.append(best_r)
+            visited_regions.add(best_r)
+            cur = best_k
+
+        # 區內各用 2-opt 排最順，再依區間順序拼接
+        ordered = []
+        for r in region_seq:
+            grp = region_stops[r]
+            if len(grp) == 1:
+                ordered.extend(grp)
+            else:
+                grp_sorted = _multi_restart_two_opt(dist, start_idx, grp)
+                ordered.extend(grp_sorted)
+
+        # 套用特殊需求約束
+        ordered, violations = _constraint_sort(stops, ordered, start_hour, dist, start_idx)
+
+        # 距離 / ETA 計算（與 solve_grouped 同）
+        dist_km = 0.0
+        seq = [start_idx] + ordered + [start_idx]
+        for a, b in zip(seq, seq[1:]):
+            dist_km += dist.d(a, b)
+        etas = []
+        t = start_hour
+        prev = start_idx
+        for k in ordered:
+            t += dist.t(prev, k) / 3600.0
+            arrive = t
+            svc = getattr(nodes[k], "service_time", 0) or 0.0
+            t += svc / 3600.0
+            etas.append((arrive, t))
+            prev = k
+        t += dist.t(prev, start_idx) / 3600.0
+        end_hour = t
+
+        load = sum(s.demand for s in stops)
+        fuel = dist_km * fuel_cost_per_km
+        total_dist += dist_km
+        total_load += load
+        total_fuel += fuel
+        result.routes.append({
+            "vehicle": v,
+            "stops": [stops[k - 1] for k in ordered],
+            "etas": etas,
+            "distance_km": dist_km,
+            "end_hour": end_hour,
+            "load": load,
+            "fuel_cost": fuel,
+            "violations": violations,
+            "region_order": region_seq,   # 供報表顯示「跨區順序」
+        })
+
+    result.routes.sort(key=lambda r: r["vehicle"].id)
+    result.total_distance_km = total_dist
+    result.total_load = total_load
+    result.total_fuel_cost = total_fuel
+    result.summary = _make_summary(result)
+    return result
+
+
 def solve_grouped(
     vehicles: list[Vehicle],
     stops_by_vehicle: dict,           # {車號: [Stop...]}
