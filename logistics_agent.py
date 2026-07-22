@@ -338,7 +338,11 @@ def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per
         ok = False
         if not no_google:
             try:
-                m, d, src = g_distance_matrix(coords, fast_fail=True)
+                # RENDER 環境：cache_only=True → 只讀 geo_cache、miss 用 Haversine 填，
+                # 絕不呼叫 Google（減費用 + 避免對外連線卡死）。本機則正常打 Google。
+                _render = bool(os.environ.get("RENDER") or os.environ.get("IS_RENDER"))
+                m, d, src = g_distance_matrix(coords, fast_fail=True,
+                                               cache_only=_render)
                 n = len(coords)
                 matrix_km_full = {}
                 duration_matrix_full = {}

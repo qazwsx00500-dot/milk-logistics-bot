@@ -19,6 +19,16 @@ import urllib.parse
 
 _BASE = "https://maps.googleapis.com/maps/api"
 
+def haversine(lat1, lon1, lat2, lon2):
+    """直線距離(公里)，cache_only 模式填 miss 格子用。"""
+    import math
+    R = 6371.0088
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlam = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlam / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(a))
+
 
 def _load_key():
     key = os.environ.get("GOOGLE_MAPS_API_KEY")
@@ -56,7 +66,7 @@ def geocode(address: str):
     raise RuntimeError(f"Google Geocoding 失敗: {status} {data.get('error_message','')}")
 
 
-def distance_matrix(coords, timeout=30, batch=10, fast_fail=False):
+def distance_matrix(coords, timeout=30, batch=10, fast_fail=False, cache_only=False):
     """
     輸入 coords=[(lat,lon)...]，index 0 = depot。
     回傳 (matrix_km, duration_sec, source)。失敗拋例外。
@@ -66,7 +76,13 @@ def distance_matrix(coords, timeout=30, batch=10, fast_fail=False):
     timeout: 單一區塊最長等待秒數（預設 30，避免卡死）。
     fast_fail: 若為 True，遇到 OVER_QUERY_LIMIT / REQUEST_DENIED 立即拋出，
                不再對剩餘區塊做無謂嘗試（呼叫方會直接降級 OSRM/直線）。
+    cache_only: 減 Google Cloud 費用硬原則——只讀 geo_cache，cache miss 的格子
+                直接用 Haversine 直線填，絕不呼叫 Google。Render 環境自動強制。
     """
+    # Render 環境：絕對不打 Google（減費用 + 避免對外連線卡死）
+    if os.environ.get("RENDER") or os.environ.get("IS_RENDER"):
+        cache_only = True
+
     key = _load_key()
     n = len(coords)
     if n <= 1:
@@ -101,6 +117,22 @@ def distance_matrix(coords, timeout=30, batch=10, fast_fail=False):
                     duration_sec[i][j] = pr[1]
         if all_hit:
             return matrix_km, duration_sec, "google-cache"
+        if cache_only:
+            # 減 Google 費用硬原則：絕不呼叫 Google。
+            # cache miss 的格子直接用 Haversine 直線填（零費用，距離不精但必跑得完）。
+            for i in range(n):
+                for j in range(n):
+                    if i == j:
+                        continue
+                    if matrix_km[i][j] == 0.0:
+                        km = haversine(coords[i][0], coords[i][1],
+                                       coords[j][0], coords[j][1])
+                        matrix_km[i][j] = km
+                        duration_sec[i][j] = km / 30.0 * 3600.0   # 30km/h 估速
+            any_real = any(matrix_km[i][j] != 0.0
+                            for i in range(n) for j in range(n) if i != j)
+            src = "google-cache" if any_real else "haversine"
+            return matrix_km, duration_sec, src
 
     for rs in range(0, n, batch):
         re = min(rs + batch, n)

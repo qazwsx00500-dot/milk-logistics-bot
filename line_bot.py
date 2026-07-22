@@ -373,13 +373,13 @@ def run_plan(data_path=None, rows=None):
     import report as report_mod
     import excel_normalizer as en
     try:
-        # Render 免費版對外網路(Google/OSRM)常被卡/黑洞 → 強制不走外部距離源，
-        # 改用 geo_cache 快取(若有命中) 或 Haversine 直線估算(零網路，必跑得完)。
-        # 本機有正常網路才用 Google/OSRM 真實道路距離。
+        # Render 免費版：走 cache 優先路徑（use_google=True → g_distance_matrix
+        # 在 RENDER 環境自動 cache_only：命中用本機預存真實距離(零費用)，
+        # miss 用 Haversine 直線填(仍零費用、不卡死)。絕不自己打 Google。
         _render = bool(os.environ.get("RENDER") or os.environ.get("IS_RENDER"))
         if _render:
-            use_google = False   # 雲端：不碰對外連線，避免卡死
-            no_google = True
+            use_google = True    # 走 cache 查詢邏輯（內部 cache_only 攔截 Google）
+            no_google = False
         else:
             use_google = True
             no_google = False
