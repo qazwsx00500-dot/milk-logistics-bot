@@ -245,6 +245,14 @@ def main():
         print("   取得方式：在 LINE 傳『我的id』給 bot，或在 .env 加 LINE_USER_ID=你的id")
         print("   設定後重跑本腳本即會自動 push 到你的 LINE。")
 
+    # 快取回寫：把本次累積的 geo_cache/matrix_cache 自動 push 回 GitHub，
+    # 讓雲端 Render 部署也能拿到最新快取，避免重複呼叫 Google 造成費用暴增。
+    try:
+        from line_bot import _persist_cache_to_git
+        _persist_cache_to_git()
+    except Exception as e:
+        print(f"⚠ 快取回寫跳過（不影響報表）: {e}")
+
 
 if __name__ == "__main__":
     main()
