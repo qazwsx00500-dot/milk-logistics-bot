@@ -83,6 +83,19 @@ if not CHANNEL_SECRET or not CHANNEL_TOKEN:
 
 configuration = Configuration(access_token=CHANNEL_TOKEN)
 parser = WebhookParser(CHANNEL_SECRET)
+# 底層 urllib3 連線池加 retry：扛 Render 免費版對 api.line.me 的
+# ConnectionResetError / 逾時（偶發 reset 自動重試 3 次，指數退避）。
+try:
+    import urllib3
+    from urllib3.util.retry import Retry
+    configuration.retries = Retry(
+        connect=3, read=3, status=3,
+        backoff_factor=0.5,
+        status_forcelist=[502, 503, 504],
+        allowed_methods=frozenset(["GET", "POST", "PUT", "DELETE"]),
+    )
+except Exception:
+    pass  # 若 SDK 結構變動導致注入失敗，退回原始（無 retry）構造
 messaging_api = MessagingApi(ApiClient(configuration))
 blob_api = MessagingApiBlob(ApiClient(configuration))
 
@@ -783,27 +796,35 @@ def _save_pending(d):
         pass
 PENDING_FILES = _load_pending()  # 啟動時從磁碟恢復
 
-def _push_to(user_id, text, quick_reply=None):
-    """用 Push 推結果給使用者（繞過 reply_token 1 秒過期限制）。"""
+def _push_to(user_id, text, quick_reply=None, _attempts=3):
+    """用 Push 推結果給使用者（繞過 reply_token 1 秒過期限制）。
+    Render 免費版對 api.line.me 偶發 ConnectionResetError → 外層重試 3 次。"""
     global LAST_RESULT
-    try:
-        from linebot.v3.messaging.models import PushMessageRequest
-        if not user_id:
-            raise ValueError("user_id 為空，無法 Push（可能事件結構不含 source.user_id）")
-        msgs = [TextMessage(text=text[:1900])]
-        if quick_reply is not None:
-            msgs[0].quick_reply = quick_reply
-        messaging_api.push_message(
-            PushMessageRequest(
-                to=user_id,
-                messages=msgs,
-            )
-        )
-        LAST_RESULT["pushed"] = True
-    except Exception as e:
+    from linebot.v3.messaging.models import PushMessageRequest
+    last_err = None
+    for _i in range(1, _attempts + 1):
+        try:
+            if not user_id:
+                raise ValueError("user_id 為空，無法 Push（可能事件結構不含 source.user_id）")
+            msgs = [TextMessage(text=text[:1900])]
+            if quick_reply is not None:
+                msgs[0].quick_reply = quick_reply
+            messaging_api.push_message(
+                PushMessageRequest(to=user_id, messages=msgs))
+            LAST_RESULT["pushed"] = True
+            return
+        except Exception as e:
+            last_err = e
+            LAST_RESULT["pushed"] = False
+            LAST_RESULT["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            if _i < _attempts:
+                time.sleep(0.5 * _i)  # 指數退避
+                continue
+            traceback.print_exc()
+            return
+    if last_err is not None:
         LAST_RESULT["pushed"] = False
-        LAST_RESULT["error"] = f"{type(e).__name__}: {str(e)[:200]}"
-        traceback.print_exc()
+        LAST_RESULT["error"] = f"{type(last_err).__name__}: {str(last_err)[:200]}"
 
 # ---- 持久化任務佇列（修 Render 免費版 worker 重啟/回收，導致背景規劃線程被殺、
 #     使用者永遠收不到結果的「靜默失敗」）。每個需要規劃的請求先落盤成 job，
