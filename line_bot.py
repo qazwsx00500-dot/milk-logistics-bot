@@ -629,6 +629,17 @@ def run_plan_choice(user_id, choice_text, pending):
     start_hour = L.DEFAULT_START_HOUR
     rows = pending["rows"]
 
+    # Render 免費版：走 cache 優先路徑（use_google=True → g_distance_matrix
+    # 在 RENDER 環境自動 cache_only：命中用本機預存真實距離(零費用)，
+    # miss 用 Haversine 直線填(仍零費用、不卡死)。絕不自己打 Google。
+    _render = bool(os.environ.get("RENDER") or os.environ.get("IS_RENDER"))
+    if _render:
+        use_google = True    # 走 cache 查詢邏輯（內部 cache_only 攔截 Google）
+        no_google = False
+    else:
+        use_google = True
+        no_google = False
+
     # 寫成臨時標準檔
     import openpyxl as _ox
     from openpyxl import Workbook as _WB
