@@ -27,6 +27,7 @@ import io
 import sys
 import json
 import time
+import socket
 import subprocess as _sp
 import traceback
 from datetime import datetime, timedelta, timezone
@@ -855,10 +856,35 @@ def _do_work(user_id, kind, payload):
         traceback.print_exc()
         return f"⚠ 處理時發生錯誤：{type(e).__name__}: {str(e)[:120]}", None
 
+# 整體看門狗逾時：規劃計算（Google/OSRM 距離矩陣）若在 HARD_TIMEOUT 秒內
+# 沒跑完（雲端對外連線被黑洞卡死），一律視同失敗回報，絕不讓 job 永遠 running。
+HARD_TIMEOUT = 90
+
+def _do_work_with_watchdog(user_id, kind, payload):
+    """套用整體 + socket 雙層逾時跑規劃，逾時也回報使用者而非乾等。"""
+    import threading as _th
+    box = {}
+    def _run():
+        try:
+            box["res"] = _do_work(user_id, kind, payload)
+        except Exception as e:
+            box["res"] = (f"⚠ 處理時發生錯誤：{type(e).__name__}: {str(e)[:120]}", None)
+    # socket 層兜底：任何 urllib 連線最多 20s 必斷（修 Render 對外連線黑洞卡死）
+    old_to = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(20)
+    t = _th.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(HARD_TIMEOUT)
+    socket.setdefaulttimeout(old_to)
+    if t.is_alive():
+        return (f"⚠ 規劃逾時（{HARD_TIMEOUT}s 未完成，可能是雲端對外網路卡住）。\n"
+                "請稍後再試一次，或本機直跑 python logistics_agent.py --data 每日配送.xlsx。", None)
+    return box.get("res", ("⚠ 未知錯誤（無結果）", None))
+
 def _do_work_and_push(user_id, kind, payload):
     """非佇列路徑（file 類）直接用：跑完更新 LAST_RESULT 並 Push。"""
     global LAST_RESULT
-    text, qr = _do_work(user_id, kind, payload)
+    text, qr = _do_work_with_watchdog(user_id, kind, payload)
     LAST_RESULT["ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
     LAST_RESULT["text"] = text
     _push_to(user_id, text, quick_reply=qr)
@@ -872,7 +898,7 @@ def _worker(jid):
         return
     job["status"] = "running"
     _save_jobs(jobs)
-    text, qr = _do_work(job["user_id"], job["kind"], job["payload"])
+    text, qr = _do_work_with_watchdog(job["user_id"], job["kind"], job["payload"])
     jobs = _load_jobs()
     jobs[jid]["status"] = "done"
     jobs[jid]["result"] = text
