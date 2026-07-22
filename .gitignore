@@ -17,6 +17,7 @@ cloudflared.exe
 
 # 暫存 / 運行態 (不進 git)
 _pending_files.json
+_jobs.json
 
 # 啟動腳本中的暫存
 .venv/

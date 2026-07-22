@@ -579,8 +579,8 @@ def handle_file(event, file_msg) -> str:
     ])
     # ★ 互動模式：傳檔後「先問車數」，使用者選完才照規則跑（不自動跑）。
     #   保留之前為修「收不到結果」加的健壯性：PENDING 已落盤(570-571)，
-    #   使用者回「自動安排/1台/2台/3台」會經 _process_and_push →
-    #   run_plan_choice 觸發規劃並 Push 結果；worker 重啟也不丟選車狀態。
+    #   使用者回「自動安排/1台/2台/3台」會經 _enqueue_job → _worker →
+    #   run_plan_choice 觸發規劃並 Push 結果；job 落盤後 worker 重啟也不丟。
     msg = (f"📥 已收到「{fname}」\n"
            f"✅ 已自動轉成標準每日配送表（{len(rows)} 筆店家，{len(skipped)} 筆跳過）\n"
            f"🔍 轉檔自檢：{'✅ 通過' if not chk_lines else str(len(chk_lines)) + ' 項需留意'}\n")
@@ -796,20 +796,50 @@ def _push_to(user_id, text, quick_reply=None):
         LAST_RESULT["error"] = f"{type(e).__name__}: {str(e)[:200]}"
         traceback.print_exc()
 
-def _process_and_push(user_id, kind, payload):
-    """背景執行緒：實際處理（可能幾十秒），完成後用 Push 推結果。"""
-    global LAST_RESULT
-    import datetime as _dt
+# ---- 持久化任務佇列（修 Render 免費版 worker 重啟/回收，導致背景規劃線程被殺、
+#     使用者永遠收不到結果的「靜默失敗」）。每個需要規劃的請求先落盤成 job，
+#     worker 跑完更新狀態並 Push；容器重啟時 _reap_stranded() 撈回未完成 job 續跑，
+#     結果仍會 Push 給使用者。 ----
+JOBS_PATH = os.path.join(HERE, "_jobs.json")
+
+def _load_jobs():
+    try:
+        with open(JOBS_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+def _save_jobs(d):
+    try:
+        with open(JOBS_PATH, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+    except Exception:
+        pass
+
+def _enqueue_job(user_id, kind, payload):
+    """落盤規劃任務（text 類可序列化→可重啟續跑；file 類含 LINE event 物件不可序列化→不落盤）。"""
+    try:
+        json.dumps(payload)
+    except Exception:
+        return None  # 不可序列化 → 不進磁碟佇列，僅當次執行（file 上傳很快，風險低）
+    jobs = _load_jobs()
+    jid = f"{int(time.time() * 1000)}_{abs(hash(user_id)) % 100000}"
+    jobs[jid] = {"user_id": user_id, "kind": kind, "payload": payload,
+                  "status": "queued", "ts": time.strftime("%Y-%m-%d %H:%M:%S"),
+                  "result": None}
+    _save_jobs(jobs)
+    return jid
+
+def _do_work(user_id, kind, payload):
+    """執行實際規劃，回傳 (text, quick_reply)。任何例外都包成錯誤文字，絕不讓線程靜默崩。"""
     try:
         if kind == "text":
             text = payload
-            # 車數選擇互動：傳檔後使用者回「自動安排/1台/2台/3台」且有暫存檔
             if text.strip() in CHOICE_WORDS and user_id in PENDING_FILES:
                 pending = PENDING_FILES.pop(user_id, None)
-                _save_pending(PENDING_FILES)  # 取走後更新磁碟
+                _save_pending(PENDING_FILES)
                 result = run_plan_choice(user_id, text.strip(), pending)
             elif text.strip() in CHOICE_WORDS:
-                # fallback：無暫存（worker 重啟/PENDING 遺失）→ 讀最近的每日配送檔直接跑
                 result = _run_choice_from_latest(text.strip())
             else:
                 result = handle_text(text)
@@ -817,17 +847,53 @@ def _process_and_push(user_id, kind, payload):
             result = handle_file(payload["event"], payload["file_msg"])
         else:
             result = "⚠ 不支援的訊息類型。"
-        # 支援 (text, quick_reply) 回傳
         qr = None
         if isinstance(result, tuple):
             result, qr = result
+        return result, qr
     except Exception as e:
         traceback.print_exc()
-        result = f"⚠ 處理時發生錯誤：{type(e).__name__}: {str(e)[:120]}"
-        qr = None
-    LAST_RESULT["ts"] = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    LAST_RESULT["text"] = result
-    _push_to(user_id, result, quick_reply=qr)
+        return f"⚠ 處理時發生錯誤：{type(e).__name__}: {str(e)[:120]}", None
+
+def _do_work_and_push(user_id, kind, payload):
+    """非佇列路徑（file 類）直接用：跑完更新 LAST_RESULT 並 Push。"""
+    global LAST_RESULT
+    text, qr = _do_work(user_id, kind, payload)
+    LAST_RESULT["ts"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    LAST_RESULT["text"] = text
+    _push_to(user_id, text, quick_reply=qr)
+
+def _worker(jid):
+    """佇列 worker：跑 job、落盤結果、Push。容器重啟後由 _reap_stranded 重新呼叫。"""
+    global LAST_RESULT
+    jobs = _load_jobs()
+    job = jobs.get(jid)
+    if not job:
+        return
+    job["status"] = "running"
+    _save_jobs(jobs)
+    text, qr = _do_work(job["user_id"], job["kind"], job["payload"])
+    jobs = _load_jobs()
+    jobs[jid]["status"] = "done"
+    jobs[jid]["result"] = text
+    jobs[jid]["ts_done"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _save_jobs(jobs)
+    LAST_RESULT["ts"] = jobs[jid]["ts_done"]
+    LAST_RESULT["text"] = text
+    _push_to(job["user_id"], text, quick_reply=qr)
+
+def _reap_stranded():
+    """容器重啟後撈回未完成 job（queued / running 卡死）續跑，結果仍會 Push 給使用者。"""
+    try:
+        jobs = _load_jobs()
+        for jid, job in list(jobs.items()):
+            if job.get("status") in ("queued", "running"):
+                print(f"🔄 續跑未完成 job {jid} ({job.get('kind')})")
+                job["status"] = "running"
+                _save_jobs(jobs)
+                threading.Thread(target=_worker, args=(jid,), daemon=True).start()
+    except Exception:
+        pass
 
 @app.route("/callback", methods=["POST", "GET"])
 def callback():
@@ -858,7 +924,7 @@ def callback():
                     messages=[TextMessage(text="✅ 收到，處理中…（完成後我會主動推播結果）")]))
             except Exception:
                 traceback.print_exc()
-            t = threading.Thread(target=_process_and_push,
+            t = threading.Thread(target=_do_work_and_push,
                                  args=(user_id, "text", _pb_text), daemon=True)
             t.start()
             continue
@@ -879,14 +945,19 @@ def callback():
             traceback.print_exc()
         # 背景執行緒跑實際處理，完成後 Push 結果
         if isinstance(event.message, TextMessageContent):
-            t = threading.Thread(target=_process_and_push,
-                                 args=(user_id, "text", event.message.text), daemon=True)
-            t.start()
+            # 落盤成 job → worker 跑完 Push；容器重啟可撈回續跑
+            jid = _enqueue_job(user_id, "text", event.message.text)
+            if jid:
+                threading.Thread(target=_worker, args=(jid,), daemon=True).start()
+            else:
+                # 極少：payload 不可序列化（不應發生於 text）→ 沿用舊路徑
+                threading.Thread(target=_do_work_and_push,
+                                 args=(user_id, "text", event.message.text), daemon=True).start()
         elif isinstance(event.message, FileMessageContent):
-            t = threading.Thread(target=_process_and_push,
+            # file 含 LINE event 物件不可序列化 → 不落盤，直接當次跑
+            threading.Thread(target=_do_work_and_push,
                                  args=(user_id, "file",
-                                       {"event": event, "file_msg": event.message}), daemon=True)
-            t.start()
+                                       {"event": event, "file_msg": event.message}), daemon=True).start()
     return "OK"
 
 
@@ -951,6 +1022,12 @@ if __name__ == "__main__":
     try:
         threading.Thread(target=_keepalive_loop, daemon=True).start()
         print("🔄 keep-alive 已啟動（每 10 分鐘自 ping，避免 Render 冷啟動變慢）")
+    except Exception:
+        pass
+
+    # ---- 容器重啟後撈回未完成 job 續跑（修「靜默失敗」）----
+    try:
+        _reap_stranded()
     except Exception:
         pass
 
