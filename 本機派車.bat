@@ -1,26 +1,20 @@
 @echo off
 chcp 65001 >nul
-REM ============================================================
-REM  本機派車 一鍵執行
-REM  雙擊本檔：用本機正常網路跑派車路線（繞開 Render 雲端卡網逾時），
-REM  報表/地圖/派車單產到 桌面/當日車輛報表/今天/，
-REM  若 .env 已設 LINE_USER_ID 則自動把摘要 push 回你的 LINE。
-REM
-REM  資料來源：桌面『路線規劃/每日配送.xlsx』
-REM  （要強制分車請改用 plan_and_push_line.py --auto / --vehicles N）
-REM ============================================================
-set HERE=%~dp0
+set "HERE=%~dp0"
 cd /d "%HERE%"
 
-echo 正在用本機網路跑派車路線...
-echo (若首次會呼叫 Google 地理編碼/距離，約數十秒)
-echo.
+set "PY="
+where py >nul 2>&1 && set "PY=py"
+if not defined PY where python >nul 2>&1 && set "PY=python"
+if not defined PY if exist "%LOCALAPPDATA%\hermes\hermes-agentenv\Scripts\python.exe" set "PY=%LOCALAPPDATA%\hermes\hermes-agentenv\Scripts\python.exe"
+if not defined PY (
+    echo Python not found. Install Python with py launcher, or check Hermes install.
+    pause
+    exit /b 1
+)
 
-python plan_and_push_line.py
-
-echo.
-echo ============================================================
-echo  跑完了。報表在：桌面\當日車輛報表\今天\
-echo  若 .env 有 LINE_USER_ID，摘要已 push 到你的 LINE。
-echo ============================================================
+echo Running local route planning, please wait...
+%PY% plan_and_push_line.py
+echo:
+echo Done. See report path printed above.
 pause
