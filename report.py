@@ -48,6 +48,54 @@ def _hhmm(hour_float):
     return f"{h:02d}:{m:02d}"
 
 
+def _constraint_badge(stop):
+    """回傳特殊需求徽章 HTML（無則空字串）。"""
+    c = getattr(stop, "constraint", None) or {}
+    if not c:
+        return ""
+    parts = []
+    if c.get("first"):
+        parts.append("首站")
+    if c.get("last"):
+        parts.append("末站")
+    if c.get("time_ub") is not None:
+        parts.append("⏰" + _hhmm(c["time_ub"]) + "前")
+    if c.get("time_lb") is not None:
+        parts.append("⏰" + _hhmm(c["time_lb"]) + "後")
+    if not parts and c.get("raw"):
+        parts.append(c["raw"])
+    if not parts:
+        return ""
+    return '<span class="cons">' + " ".join(parts) + "</span>"
+
+
+def _cons_text(stop):
+    """特殊需求純文字（給 CSV/JSON 用）。"""
+    c = getattr(stop, "constraint", None) or {}
+    if not c:
+        return ""
+    if c.get("raw"):
+        return c["raw"]
+    parts = []
+    if c.get("first"):
+        parts.append("首站")
+    if c.get("last"):
+        parts.append("末站")
+    if c.get("time_ub") is not None:
+        parts.append(_hhmm(c["time_ub"]) + "前")
+    if c.get("time_lb") is not None:
+        parts.append(_hhmm(c["time_lb"]) + "後")
+    return " ".join(parts)
+
+
+def _viol_html(rt):
+    vs = rt.get("violations") or []
+    if not vs:
+        return ""
+    items = "".join(f"<li>⚠ {n}：{reason}</li>" for n, reason in vs)
+    return f'<div class="viol"><b>⚠ 特殊需求未達成（{len(vs)} 間）：</b><ul>{items}</ul></div>'
+
+
 def _items_str(stop):
     """回傳該站非鮮奶品項的顯示字串，如 '冰勃朗1(箱),鳳梨果泥3(包)'；無則空字。"""
     items = getattr(stop, "items", None) or {}
@@ -127,7 +175,8 @@ def build_html(result, depot, out_path, meta=None):
                 f"<tr><td>{si+1}</td><td><b>{s.name}</b><br><span class='addr'>{getattr(s,'address','')}</span></td>"
                 f"<td class='num'>{int(qty) if qty==int(qty) else qty}</td>"
                 f"<td class='num'>{item_txt or '—'}</td>"
-                f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td></tr>"
+                f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td>"
+                f"<td>{_constraint_badge(s)}</td></tr>"
             )
         route_cards += f"""
         <div class="card">
@@ -141,6 +190,7 @@ def build_html(result, depot, out_path, meta=None):
             <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到達</th><th>離開</th></tr></thead>
             <tbody>{stops_html}</tbody>
           </table>
+          {_viol_html(rt)}
         </div>"""
 
     skipped = getattr(result, "skipped", [])
@@ -171,6 +221,7 @@ def build_html(result, depot, out_path, meta=None):
  th{{color:#666;font-weight:600;}}
  td.num,th.num{{text-align:right;font-variant-numeric:tabular-nums;}}
  .addr{{color:#888;font-size:11px;}}
+.cons{{color:#1a73e8;font-size:11px;font-weight:600;}}
  .warn{{color:#c0392b;font-weight:700;}}
  .ok{{color:#0b6b3a;font-weight:700;}}
  .skip{{background:#fff3cd;border:1px solid #ffe69c;border-radius:10px;padding:10px 14px;font-size:13px;}}
@@ -240,7 +291,8 @@ def build_html_grouped(result, out_path, meta=None):
                 f"<tr><td>{si+1}</td><td><b>{s.name}</b><br><span class='addr'>{s.address}</span></td>"
                 f"<td class='num'>{qty}</td>"
                 f"<td class='num'>{item_txt or '—'}</td>"
-                f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td></tr>"
+                f"<td class='num'>{_hhmm(a)}</td><td class='num'>{_hhmm(lv)}</td>"
+                f"<td>{_constraint_badge(s)}</td></tr>"
             )
         cards += f"""
         <div class="card">
@@ -249,10 +301,11 @@ def build_html_grouped(result, out_path, meta=None):
             實際里程 {rt['distance_km']:.1f} km ｜ 總瓶數 {rt['load']:.0f} ｜
             預計回到起點 {ret}（目標 {_hhmm(TARGET_RETURN_HOUR)}）{ret_tag}{fuel_txt}</div>
           <table>
-            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到店</th><th>離店</th></tr></thead>
+            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>特殊需求</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
           </table>
           {_veh_items_summary(rt)}
+          {_viol_html(rt)}
         </div>"""
 
     skipped = getattr(result, "skipped", [])
@@ -327,7 +380,7 @@ def build_html_per_vehicle(result, day_dir, meta=None):
            "table{width:100%;border-collapse:collapse;font-size:14px;}"
            "th,td{text-align:left;padding:7px 6px;border-bottom:1px solid #eee;}"
            "th{color:#666;font-weight:600;}td.num,th.num{text-align:right;font-variant-numeric:tabular-nums;}"
-           ".addr{color:#888;font-size:11px;}.ok{color:#0b8a43;font-weight:700;}"
+           ".addr{color:#888;font-size:11px;}.cons{color:#1a73e8;font-size:11px;font-weight:600;}.ok{color:#0b8a43;font-weight:700;}"
            ".warn{color:#c62828;font-weight:700;}footer{text-align:center;color:#999;font-size:12px;margin:16px 0;}"
            "@media print{.dlbtn{display:none;}}</style>")
     for rt in result.routes:
@@ -347,6 +400,7 @@ def build_html_per_vehicle(result, day_dir, meta=None):
                      "</b><br><span class='addr'>" + str(sp.address) + "</span></td>"
                      "<td class='num'>" + str(qty) + "</td>"
                      "<td class='num'>" + (_items_str(sp) or "—") + "</td>"
+                     "<td>" + _constraint_badge(sp) + "</td>"
                      "<td class='num'>" + _hhmm(a) +
                      "</td><td class='num'>" + _hhmm(lv) + "</td></tr>")
         # 本車載貨品項總數區塊（與總表共用 _veh_items_summary）
@@ -363,8 +417,8 @@ def build_html_per_vehicle(result, day_dir, meta=None):
                 " \uff5c \u7e3d\u74f6\u6578 " + ("%.0f" % rt["load"]) +
                 " \uff5c \u9810\u8a08\u56de\u5230\u8d77\u9ede " + ret + "\uff08\u76ee\u6a19 " + _hhmm(TARGET_RETURN_HOUR) + "\uff09" +
                 ret_tag + fuel_txt + "</div><table><thead><tr><th>#</th><th>\u5e97\u5bb6 / \u5730\u5740</th>"
-                "<th class='num'>瓶數</th><th class='num'>品項</th><th class='num'>到店</th><th class='num'>離店</th></tr></thead>"
-                "<tbody>" + rows + "</tbody></table></div>" + item_summary +
+                "<th class='num'>瓶數</th><th class='num'>品項</th><th class='num'>特殊需求</th><th class='num'>到店</th><th class='num'>離店</th></tr></thead>"
+                "<tbody>" + rows + "</tbody></table></div>" + item_summary + _viol_html(rt) +
                 "<footer>本車報表由物流路線規劃 Agent 產出</footer>"
                 "</div>" + _PNG_SCRIPT + "</body></html>")
         fp = os.path.join(day_dir, "route_report_" + _safe_veh(v.id) + ".html")
@@ -377,14 +431,14 @@ def build_html_per_vehicle(result, day_dir, meta=None):
 def build_csv_grouped(result, out_path):
     with open(out_path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["車號", "序號", "店家", "地址", "瓶數", "品項", "下貨秒數", "預計到店", "預計離店"])
+        w.writerow(["車號", "序號", "店家", "地址", "瓶數", "品項", "特殊需求", "下貨秒數", "預計到店", "預計離店"])
         for rt in result.routes:
             v = rt["vehicle"]
             for si, s in enumerate(rt["stops"]):
                 a, lv = rt["etas"][si]
                 qty = int(s.demand) if s.demand == int(s.demand) else s.demand
                 svc = int(round(s.service_time))
-                w.writerow([v.id, si + 1, s.name, s.address, qty, _items_str(s), svc, _hhmm(a), _hhmm(lv)])
+                w.writerow([v.id, si + 1, s.name, s.address, qty, _items_str(s), _cons_text(s), svc, _hhmm(a), _hhmm(lv)])
     # 總計補一張摘要表(同檔下方另寫會蓋掉，這裡用第二種方式：寫入 summary 區)
     with open(out_path, "a", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
@@ -464,7 +518,7 @@ def build_dispatch_grouped(result, day_dir, meta=None):
           <div class="card-meta">起點 {v.start_addr or '—'} ｜ {len(rt['stops'])} 站 ｜
             總瓶數 {rt['load']:.0f} ｜ 里程 {rt['distance_km']:.1f} km ｜ 回倉 {ret}（目標{_hhmm(TARGET_RETURN_HOUR)}）{tag}{fuel_txt}</div>
           <table>
-            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>到店</th><th>離店</th></tr></thead>
+            <thead><tr><th>#</th><th>店家 / 地址</th><th>瓶數</th><th>品項</th><th>特殊需求</th><th>到店</th><th>離店</th></tr></thead>
             <tbody>{rows_html}</tbody>
           </table>
         </div>"""
@@ -554,6 +608,7 @@ def build_dispatch_data(result, out_path, meta=None):
                 "bottles": round(s.demand) if s.demand == int(s.demand) else s.demand,
                 "items": items,
                 "service_sec": int(round(getattr(s, "service_time", 0) or 0)),
+                "constraint": _cons_text(s),
                 "arrive": _hhmm(a),
                 "leave": _hhmm(lv),
             })

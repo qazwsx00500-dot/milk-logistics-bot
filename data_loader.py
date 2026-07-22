@@ -48,6 +48,7 @@ _NAME_KEYS = ["店家名稱", "名稱", "店名", "客戶名稱", "name", "店�
 _ADDR_KEYS = ["店家地址", "地址", "客戶地址", "address", "addr"]
 _QTY_KEYS = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count"]
 _ITEM_KEYS = ["品項", "品名", "貨品", "品項名稱", "項目", "item", "items"]
+_CONS_KEYS = ["特殊需求", "特殊要求", "需求", "備註", "備註說明", "constraint", "note", "remark"]
 EXTRA_SERVICE_SEC_FOR_ITEMS = 180.0   # 該店有非鮮奶品項時，額外加 180 秒 (~3分)
 
 # ── 品名 → 強制單位對照表（Ann 確認規則，2026-07-19）──────────────
@@ -121,6 +122,54 @@ def _get(row, keys, idx_by_norm):
     return None
 
 
+def parse_constraint(raw):
+    """把『特殊需求』欄文字解析成約束 dict。
+    支援語法（多條用 中文/英文 逗號、頓號、分號分隔）：
+      時間窗上界(必須幾點『前』到):  '10前' '上午10前' '10:30前' '10點前' '10:00前' 'AM10前'
+      時間窗下界(必須幾點『後』到):  '14後' '下午2後' '14:00後' '2點後' 'PM2後'
+      區間(只能這段送):              '10-14' '10:00-14:00' '10~14'
+      固定首站:                      '首站' '第一站' '優先' '先送'
+      固定末站:                      '末站' '最後站' '最後' '後送' '晚送'
+    回傳 {"time_lb":float|None, "time_ub":float|None, "first":bool, "last":bool, "raw":str}
+    無效/空白 -> {}（表示無約束）。
+    """
+    out = {"time_lb": None, "time_ub": None, "first": False, "last": False, "raw": ""}
+    if not raw or not str(raw).strip():
+        return out
+    txt = str(raw).strip()
+    out["raw"] = txt
+    # 先抓區間 10-14 / 10:00-14:00 / 10~14
+    m_rng = re.search(r"(\d{1,2})(?::(\d{2}))?\s*[-\uFF5E~]\s*(\d{1,2})(?::(\d{2}))?", txt)
+    if m_rng:
+        lb_h, lb_m, ub_h, ub_m = m_rng.groups()
+        out["time_lb"] = int(lb_h) + (int(lb_m) if lb_m else 0) / 60.0
+        out["time_ub"] = int(ub_h) + (int(ub_m) if ub_m else 0) / 60.0
+        # 區間已涵蓋，不再個別抓前/後（但首末站仍可共存）
+    # 抓「前」(上界)
+    m_ub = re.search(r"(?:上午|下午|早上|am|pm)?\s*(\d{1,2})(?::(\d{2}))?\s*點?\s*前", txt, re.IGNORECASE)
+    if m_ub and out["time_ub"] is None:
+        h, m = m_ub.groups()
+        hh = int(h)
+        if re.search("下午|pm", txt, re.IGNORECASE) and hh < 12:
+            hh += 12
+        out["time_ub"] = hh + (int(m) if m else 0) / 60.0
+    # 抓「後」(下界)
+    m_lb = re.search(r"(?:上午|下午|早上|am|pm)?\s*(\d{1,2})(?::(\d{2}))?\s*點?\s*後", txt, re.IGNORECASE)
+    if m_lb and out["time_lb"] is None:
+        h, m = m_lb.groups()
+        hh = int(h)
+        if re.search("下午|pm", txt, re.IGNORECASE) and hh < 12:
+            hh += 12
+        out["time_lb"] = hh + (int(m) if m else 0) / 60.0
+    # 首站
+    if re.search("首站|第一站|優先|先送|最早", txt):
+        out["first"] = True
+    # 末站
+    if re.search("末站|最後站|最後|後送|晚送", txt):
+        out["last"] = True
+    return out
+
+
 def parse_items(raw):
     """把『品項』欄文字解析成 {品名: {"qty": float, "unit": str}}。
     格式: 品名數量(單位)，多品項用逗號/、/；分隔。例:
@@ -175,6 +224,8 @@ def load_from_rows(rows, headers, depot=None):
             qty = 0.0
         # 品項欄：非鮮奶貨品，文字 -> dict
         item_raw = _get(row, _ITEM_KEYS, idx_by_norm)
+        cons_raw = _get(row, _CONS_KEYS, idx_by_norm)
+        cons = parse_constraint(cons_raw) if cons_raw else {}
         items = parse_items(item_raw)
         svc = qty * SERVICE_SEC_PER_BOTTLE
         if items:
@@ -189,6 +240,8 @@ def load_from_rows(rows, headers, depot=None):
                     name=name, lat=0.0, lon=0.0, demand=qty,
                     service_time=svc, address=addr, vehicle=veh,
                     items=dict(items))
+        if cons:
+            stop.constraint = cons
         stops_by_vehicle.setdefault(veh, []).append(stop)
         # 起點：若有總倉 depot 則統一用總倉；否則用 Excel 出發點地址欄
         if depot is not None:

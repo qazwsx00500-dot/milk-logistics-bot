@@ -29,9 +29,14 @@ class Stop:
     vehicle: str = ""            # 所屬車號
     items: dict = None           # 非鮮奶品項: {品名: {"qty": float, "unit": str}}
                                   #   (鮮乳已計入 demand，不在此)
+    # ── 特殊需求約束（Excel「特殊需求」欄解析）──────────────
+    constraint: dict = None      # {"time_lb": float|None, "time_ub": float|None,
+                                  #   "first": bool, "last": bool, "raw": str}
     def __post_init__(self):
         if self.items is None:
             self.items = {}
+        if self.constraint is None:
+            self.constraint = {}
 
 
 @dataclass
@@ -157,6 +162,63 @@ def _multi_restart_two_opt(dist, start_idx, stop_idxs, n_restart=8, max_iter=200
     return best_route
 
 
+def _constraint_sort(stops, ordered, start_hour, dist, start_idx=0):
+    """把 2-opt 排序後的路線，依『特殊需求』約束調整順序。
+    - 首站(first): 移到最前
+    - 末站(last): 移到最後
+    - 時間窗(time_lb/time_ub): 軟約束，把早送(時間窗上界小)往前挪、晚送(下界大)往後挪
+      用插入排序：依 (time_ub or time_lb or 99) 升序盡量排，但不破壞太嚴重（仍貪心插入到合法位）
+    回傳 (new_ordered, violations)；violations 列出仍違反時間窗的站名。
+    """
+    stops_map = {i: stops[i - 1] for i in ordered}  # node index -> Stop
+    # 分類
+    firsts, lasts, mids = [], [], []
+    for k in ordered:
+        c = getattr(stops_map[k], "constraint", None) or {}
+        if c.get("first"):
+            firsts.append(k)
+        elif c.get("last"):
+            lasts.append(k)
+        else:
+            mids.append(k)
+    # 中間段按時間窗上界升序（早送排前面）。無時間窗者用大值排後。
+    def _key(k):
+        c = getattr(stops_map[k], "constraint", None) or {}
+        ub = c.get("time_ub")
+        lb = c.get("time_lb")
+        # 早送(time_ub 小) 排最前(group 0)；無約束居中(group 1)；晚送(time_lb 大) 排最後(group 2)
+        if ub is not None:
+            return (0, ub)
+        if lb is not None:
+            return (2, lb)
+        return (1, 99.0)
+    mids.sort(key=_key)
+    new_ordered = firsts + mids + lasts
+
+    # 檢查違反時間窗
+    violations = []
+    t = start_hour
+    prev = start_idx
+    # 用同一 dist 重算 ETA 檢查
+    for k in new_ordered:
+        t += dist.t(prev, k) / 3600.0
+        arrive = t
+        c = getattr(stops_map[k], "constraint", None) or {}
+        if c.get("time_ub") is not None and arrive > c["time_ub"] + 1/60.0:
+            violations.append((stops_map[k].name,
+                               f"應 {_hhmm(c['time_ub'])}前到，實際 {_hhmm(arrive)}"))
+        if c.get("time_lb") is not None and arrive < c["time_lb"] - 1/60.0:
+            violations.append((stops_map[k].name,
+                               f"應 {_hhmm(c['time_lb'])}後到，實際 {_hhmm(arrive)}"))
+        svc = getattr(stops_map[k], "service_time", 0) or 0.0
+        t += svc / 3600.0
+        prev = k
+    return new_ordered, violations
+
+
+    return best_route
+
+
 def solve_grouped(
     vehicles: list[Vehicle],
     stops_by_vehicle: dict,           # {車號: [Stop...]}
@@ -206,6 +268,8 @@ def solve_grouped(
 
         dist = _Dist(nodes, m_km, m_dur)
         ordered = _multi_restart_two_opt(dist, start_idx, stop_idxs)
+        # 套用特殊需求約束（首站/末站硬約束 + 時間窗軟排序）
+        ordered, violations = _constraint_sort(stops, ordered, start_hour, dist, start_idx)
 
         # 距離
         dist_km = 0.0
@@ -240,6 +304,7 @@ def solve_grouped(
             "end_hour": end_hour,
             "load": load,
             "fuel_cost": fuel,
+            "violations": violations,   # 特殊需求時間窗未達成清單
         })
 
     result.routes.sort(key=lambda r: r["vehicle"].id)

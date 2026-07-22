@@ -398,10 +398,11 @@ def run_plan(data_path=None, rows=None):
             from openpyxl import Workbook as _WB
             tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
             wb = _WB(); ws = wb.active; ws.title = "每日配送"
-            ws.append(["車號", "店家名稱", "店家地址", "瓶數", "品項"])
+            ws.append(["車號", "店家名稱", "店家地址", "瓶數", "品項", "特殊需求"])
             for veh, n, a, q, *rest in rows:
                 item = rest[0] if rest else ""
-                ws.append([veh, n, a, q, item])
+                cons = rest[1] if len(rest) > 1 else ""
+                ws.append([veh, n, a, q, item, cons])
             wb.save(tmp)
             data_path = tmp
 
@@ -553,7 +554,7 @@ def handle_file(event, file_msg) -> str:
     # 轉檔後自行檢查 (避免把異常資料丟給 JOJO)
     chk_lines = []
     err_n = 0
-    for veh, name, addr, qty, item in rows:
+    for veh, name, addr, qty, item, *rest in rows:
         if not addr or not str(addr).strip():
             chk_lines.append(f"  ❌ 「{name}」地址空白，無法定位")
             err_n += 1
@@ -611,10 +612,11 @@ def run_plan_choice(user_id, choice_text, pending):
     from openpyxl import Workbook as _WB
     tmp = os.path.join(HERE, "_normalized_tmp.xlsx")
     wb = _WB(); ws = wb.active; ws.title = "每日配送"
-    ws.append(["車號", "店家名稱", "店家地址", "瓶數", "品項"])
+    ws.append(["車號", "店家名稱", "店家地址", "瓶數", "品項", "特殊需求"])
     for veh, n, a, q, *rest in rows:
         item = rest[0] if rest else ""
-        ws.append([veh, n, a, q, item])
+        cons = rest[1] if len(rest) > 1 else ""
+        ws.append([veh, n, a, q, item, cons])
     wb.save(tmp)
 
     had_no_vehicle = all(r[0] == "" for r in rows)

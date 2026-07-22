@@ -28,6 +28,7 @@ _ADDR = ["店家地址", "送貨地址", "地址", "客戶地址", "送貨", "ad
 _QTY = ["瓶數", "數量", "箱數", "瓶量", "qty", "bottles", "count", "件數", "瓶", "量"]
 _ITEM = ["品項", "品名", "貨品", "項目", "item", "items"]
 _FUEL = ["油資單價", "油資", "油錢單價", "fuel", "fuel_cost", "fuel_cost_per_km", "元每km"]
+_CONS = ["特殊需求", "特殊要求", "需求", "備註", "備註說明", "constraint", "note", "remark"]
 
 # 台灣縣市關鍵字（用於無車號時的地理分車）
 _REGION_KEYWORDS = [
@@ -142,6 +143,7 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     col_veh = _match_col(hnorm, _VEH)
     col_fuel = _match_col(hnorm, _FUEL)
     col_item = _match_col(hnorm, _ITEM)
+    col_cons = _match_col(hnorm, _CONS)
 
     skipped = []
     rows = []
@@ -166,6 +168,7 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         qty = _clean_int(_val(col_qty))
         veh = str(_val(col_veh)).strip()
         item = str(_val(col_item)).strip()
+        cons = str(_val(col_cons)).strip()
         # 續行繼承 (Bug: 同列前面空白 = 承襲上一列店家/地址)
         #   客戶簡稱 與 送貨地址 皆空 → 繼承上一筆
         #   僅地址空白(店名重複) → 繼承上一筆地址
@@ -200,10 +203,12 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
         akey = _norm_addr(addr)
         if akey not in _shops:
             _shops[akey] = {"veh": veh, "name": name or f"店家{i}", "addr": addr,
-                            "milk": 0.0, "items": {}}
+                            "milk": 0.0, "items": {}, "cons": cons}
         sh = _shops[akey]
         if veh and not sh["veh"]:
             sh["veh"] = veh
+        if cons:
+            sh["cons"] = cons
         if name and sh["name"].startswith("店家"):
             sh["name"] = name
         if _is_milk(item):
@@ -223,7 +228,8 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
             continue
         # 有品項但鮮奶相抵成負/0 → 瓶數歸 0 (仍有非鮮奶貨要送)
         out_milk = milk_int if milk_int > 0 else 0
-        rows.append((sh["veh"], sh["name"], sh["addr"], out_milk, item_str))
+        cons_val = sh.get("cons", "")
+        rows.append((sh["veh"], sh["name"], sh["addr"], out_milk, item_str, cons_val))
 
     if not rows:
         return [], skipped, None, fuel_cost
@@ -236,9 +242,9 @@ def normalize_excel(path, out_dir, default_vehicle="車01", date_str=None):
     wb2 = Workbook()
     ws2 = wb2.active
     ws2.title = "每日配送"
-    ws2.append(["車號", "店家名稱", "店家地址", "瓶數", "品項"])
-    for veh, name, addr, qty, item in rows:
-        ws2.append([veh, name, addr, qty, item])
+    ws2.append(["車號", "店家名稱", "店家地址", "瓶數", "品項", "特殊需求"])
+    for veh, name, addr, qty, item, cons in rows:
+        ws2.append([veh, name, addr, qty, item, cons])
     wb2.save(out_path)
     return rows, skipped, out_path, fuel_cost
 
