@@ -32,35 +32,50 @@ DEPOT = Stop("DEPOT", f"總倉 ({DEPOT_ADDR})", 0.0, 0.0, address=DEPOT_ADDR)
 DEFAULT_START_HOUR = 9.5        # 司機正常出車 09:30
 TARGET_RETURN_HOUR = 17.0       # 目標下午 17:00 回到倉庫
 
-# 預設資料/報表資料夾：使用者的 OneDrive 桌面「路線規劃」
-# (你的桌面是 OneDrive 同步桌面，故預設指向此路徑，方便直接在桌面操作)
-def _default_data_dir():
-    base = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面", "路線規劃")
-    if not os.path.isdir(base):
-        base = os.path.join(os.path.expanduser("~"), "Desktop", "路線規劃")
+# 路徑：本機用 OneDrive 桌面（你桌面是 OneDrive 同步桌面）；
+# 雲端(Render/Linux 容器)沒有 OneDrive → 改指向容器本地 /app/data，
+# 報表再透過既有 /report、/dispatch 等 HTTP 端點丟本機 ANN(ann_archive) 抓回，
+# 避免「雲端把檔寫進容器自己的 OneDrive 幽靈目錄、本機 ANN 永遠抓不到」。
+def _is_render():
+    # Render 會自動注入 RENDER=true / IS_RENDER 等環境變數
+    return bool(os.environ.get("RENDER") or os.environ.get("IS_RENDER"))
+
+def _base_data():
+    if _is_render():
+        base = os.path.join(os.path.expanduser("~"), "data")
+    else:
+        od = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
+        if os.path.isdir(od):
+            base = os.path.join(od, "路線規劃")
+        else:
+            base = os.path.join(os.path.expanduser("~"), "Desktop", "路線規劃")
     os.makedirs(base, exist_ok=True)
     return base
+
+def _default_data_dir():
+    return _base_data()
 
 DATA_DIR = _default_data_dir()
 
 def _default_report_dir():
-    onedrive_desk = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
-    if os.path.isdir(onedrive_desk):
-        base = os.path.join(onedrive_desk, "當日車輛報表")
+    if _is_render():
+        base = os.path.join(os.path.expanduser("~"), "data", "reports")
     else:
-        base = os.path.join(os.path.expanduser("~"), "Desktop", "當日車輛報表")
+        od = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
+        base = os.path.join(od, "當日車輛報表") if os.path.isdir(od) \
+            else os.path.join(os.path.expanduser("~"), "Desktop", "當日車輛報表")
     os.makedirs(base, exist_ok=True)
     return base
 
 REPORT_DIR = _default_report_dir()
 
 def _default_dispatch_dir():
-    # 派車單 / 司機派遣清單：每台車一份，給司機/內勤拿著跑，與路線規劃總報表(當日車輛報表)分開。
-    onedrive_desk = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
-    if os.path.isdir(onedrive_desk):
-        base = os.path.join(onedrive_desk, "當日派車單")
+    if _is_render():
+        base = os.path.join(os.path.expanduser("~"), "data", "dispatch")
     else:
-        base = os.path.join(os.path.expanduser("~"), "Desktop", "當日派車單")
+        od = os.path.join(os.path.expanduser("~"), "OneDrive", "桌面")
+        base = os.path.join(od, "當日派車單") if os.path.isdir(od) \
+            else os.path.join(os.path.expanduser("~"), "Desktop", "當日派車單")
     os.makedirs(base, exist_ok=True)
     return base
 

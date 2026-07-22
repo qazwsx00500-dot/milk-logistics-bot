@@ -997,6 +997,22 @@ def view_last_result():
     return Response(body, mimetype="text/plain; charset=utf-8")
 
 
+@app.route("/jobs", methods=["GET"])
+def view_jobs():
+    """診斷用：列出目前 job 佇列狀態（queued/running/done），
+    用於確認『使用者回指令後 webhook 有沒有進 job、有沒有卡住』。"""
+    jobs = _load_jobs()
+    if not jobs:
+        return Response("（無 job 佇列記錄）", mimetype="text/plain; charset=utf-8")
+    lines = [f"job 數: {len(jobs)}", "=" * 30]
+    for jid, j in sorted(jobs.items(), key=lambda kv: kv[1].get("ts", "")):
+        u = (j.get("user_id") or "?")[:12]
+        lines.append(f"[{j.get('status','?')}] {jid} | {j.get('kind')} | uid={u} | {j.get('ts','')}")
+        if j.get("result"):
+            lines.append(f"    → {j['result'][:120]}")
+    return Response("\n".join(lines), mimetype="text/plain; charset=utf-8")
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     print(f"🤖 LINE 路線機器人啟動中 (port {port})...")
