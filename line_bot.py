@@ -317,10 +317,17 @@ def view_map_png():
 
 
 # ---- 指令處理 ----
-def handle_text(text: str) -> str:
-    """回傳要推回 LINE 的文字訊息。"""
+def handle_text(text: str, user_id: str = None) -> str:
+    """回傳要推回 LINE 的文字訊息。user_id 用於『我的id』指令存檔。"""
     t = text.strip()
     cmd = t.lower()
+
+    if cmd in ("我的id", "myid", "my id", "uid"):
+        if not user_id:
+            return "⚠ 無法取得你的 user_id（事件不含來源）。"
+        _save_user_id(user_id)
+        return (f"🆔 你的 LINE user_id：\n{user_id}\n\n"
+                f"已自動存入 .env 的 LINE_USER_ID，本機腳本 plan_and_push_line.py 可自動 push 給你。")
 
     if cmd in ("幫助", "help", "?", "指令"):
         return (
@@ -360,6 +367,18 @@ def handle_text(text: str) -> str:
         return run_plan()
 
     return ("❓ 我不懂這個指令。\n輸入「幫助」看可用指令；或直接傳 Excel 檔給我。")
+
+
+def _save_user_id(uid: str):
+    """把使用者的 LINE user_id 寫進 .env（供本機 plan_and_push_line.py 自動 push 用）。"""
+    p = os.path.join(HERE, ".env")
+    lines = []
+    if os.path.exists(p):
+        lines = open(p, encoding="utf-8").read().splitlines()
+    kept = [l for l in lines if not l.strip().startswith("LINE_USER_ID=")]
+    kept.append(f"LINE_USER_ID={uid}")
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("\n".join(kept) + "\n")
 
 
 def _save_depot(addr: str):
@@ -883,7 +902,7 @@ def _do_work(user_id, kind, payload):
             elif text.strip() in CHOICE_WORDS:
                 result = _run_choice_from_latest(text.strip())
             else:
-                result = handle_text(text)
+                result = handle_text(text, user_id)
         elif kind == "file":
             result = handle_file(payload["event"], payload["file_msg"])
         else:
