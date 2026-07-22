@@ -638,12 +638,12 @@ def run_plan_choice(user_id, choice_text, pending):
 
     if force_v is not None:
         result, skipped = L.plan_auto_assign(
-            start_hour, tmp, True, False, fuel_cost_per_km=fuel_cost,
+            start_hour, tmp, use_google, no_google, fuel_cost_per_km=fuel_cost,
             force_vehicles=force_v)
         mode_note = f"你指定 {force_v} 台（只求最快回倉，不限制{_hhmm(L.TARGET_RETURN_HOUR)}）"
     else:
         result, skipped = L.plan_auto_assign(
-            start_hour, tmp, True, False, fuel_cost_per_km=fuel_cost)
+            start_hour, tmp, use_google, no_google, fuel_cost_per_km=fuel_cost)
         mode_note = f"由 Agent 依『09:30出車/{_hhmm(L.TARGET_RETURN_HOUR)}回倉』自動安排"
 
     if result is None:
