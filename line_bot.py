@@ -373,8 +373,16 @@ def run_plan(data_path=None, rows=None):
     import report as report_mod
     import excel_normalizer as en
     try:
-        use_google = True
-        no_google = False
+        # Render 免費版對外網路(Google/OSRM)常被卡/黑洞 → 強制不走外部距離源，
+        # 改用 geo_cache 快取(若有命中) 或 Haversine 直線估算(零網路，必跑得完)。
+        # 本機有正常網路才用 Google/OSRM 真實道路距離。
+        _render = bool(os.environ.get("RENDER") or os.environ.get("IS_RENDER"))
+        if _render:
+            use_google = False   # 雲端：不碰對外連線，避免卡死
+            no_google = True
+        else:
+            use_google = True
+            no_google = False
         start_hour = L.DEFAULT_START_HOUR   # 9.5 = 09:30 出車
         fuel_cost = L._load_fuel_cost()
         # data_path 檔若含『油資單價』欄 → 優先
@@ -1036,6 +1044,28 @@ def view_jobs():
         lines.append(f"[{j.get('status','?')}] {jid} | {j.get('kind')} | uid={u} | {j.get('ts','')}")
         if j.get("result"):
             lines.append(f"    → {j['result'][:120]}")
+    return Response("\n".join(lines), mimetype="text/plain; charset=utf-8")
+
+
+@app.route("/netcheck", methods=["GET"])
+def netcheck():
+    """診斷：從 Render 容器探測對外網路（Google Maps / OSRM）連通性，
+    用於確認『規劃逾時』是否因容器對外連線被卡/黑洞。"""
+    import socket
+    targets = {
+        "google_maps": ("maps.googleapis.com", 443),
+        "osrm": ("router.project-osrm.org", 443),
+        "google_generic": ("www.google.com", 443),
+    }
+    lines = ["Render 容器對外網路探測：", "=" * 30]
+    for name, (host, port) in targets.items():
+        t0 = time.time()
+        try:
+            sock = socket.create_connection((host, port), timeout=8)
+            sock.close()
+            lines.append(f"✅ {name} ({host}:{port}) 連通 {time.time()-t0:.2f}s")
+        except Exception as e:
+            lines.append(f"❌ {name} ({host}:{port}) 失敗 {type(e).__name__}: {str(e)[:60]} ({time.time()-t0:.2f}s)")
     return Response("\n".join(lines), mimetype="text/plain; charset=utf-8")
 
 
