@@ -100,27 +100,48 @@ def _route_duration_sec(dist, start_idx, stop_idxs):
     return total
 
 
-def _nearest_neighbor(dist, start_idx, stop_idxs):
+def _edge_cost(dist, a, b, region_fn=None, lam=0.0):
+    """單段成本。lam>0 時跨區段加權懲罰：成本 = t(a,b)*(1+lam)。
+    lam=0 → 純行車時間（等同 2-opt）；lam 大 → 強聚簇。中間值即平衡點。"""
+    base = dist.t(a, b)
+    if lam and region_fn is not None:
+        ra = region_fn(dist.nodes[a].address)
+        rb = region_fn(dist.nodes[b].address)
+        if ra != rb:
+            return base * (1.0 + lam)
+    return base
+
+
+def _route_cost_sec(dist, start_idx, stop_idxs, region_fn=None, lam=0.0):
+    """含區域懲罰的總成本（供 2-opt 比較用）。"""
+    if not stop_idxs:
+        return 0.0
+    seq = [start_idx] + list(stop_idxs) + [start_idx]
+    total = 0.0
+    for a, b in zip(seq, seq[1:]):
+        total += _edge_cost(dist, a, b, region_fn, lam)
+    for k in stop_idxs:
+        total += getattr(dist.nodes[k], "service_time", 0) or 0.0
+    return total
+
+
+def _nearest_neighbor(dist, start_idx, stop_idxs, region_fn=None, lam=0.0):
     remaining = list(stop_idxs)
     route = []
     current = start_idx
-    t_acc = 0.0
     while remaining:
-        def cost(k):
-            return dist.t(current, k)
-        nxt = min(remaining, key=cost)
+        nxt = min(remaining, key=lambda k: _edge_cost(dist, current, k, region_fn, lam))
         route.append(nxt)
-        t_acc += dist.t(current, nxt) + (getattr(dist.nodes[nxt], "service_time", 0) or 0)
         remaining.remove(nxt)
         current = nxt
     return route
 
 
-def _two_opt(dist, start_idx, stop_idxs, max_iter=200):
+def _two_opt(dist, start_idx, stop_idxs, max_iter=200, region_fn=None, lam=0.0):
     route = list(stop_idxs)
     if len(route) < 4:
         return route
-    best = _route_duration_sec(dist, start_idx, route)
+    best = _route_cost_sec(dist, start_idx, route, region_fn, lam)
     improved = True
     it = 0
     while improved and it < max_iter:
@@ -129,17 +150,17 @@ def _two_opt(dist, start_idx, stop_idxs, max_iter=200):
         for i in range(len(route) - 1):
             for j in range(i + 1, len(route)):
                 new = route[:i] + route[i:j + 1][::-1] + route[j + 1:]
-                d = _route_duration_sec(dist, start_idx, new)
+                d = _route_cost_sec(dist, start_idx, new, region_fn, lam)
                 if d + 1e-9 < best:
                     route, best = new, d
                     improved = True
     return route
 
 
-def _multi_restart_two_opt(dist, start_idx, stop_idxs, n_restart=8, max_iter=200, seed=12345):
-    """multi-restart 2-opt：多個隨機起點各跑 NN+2-opt，取總行車秒最小者。
-    解決單次 2-opt 從 NN 起點出發困在局部最優的問題（實測車02 465分→437分）。
-    站數 <= 3 直接回傳（無優化空間）。"""
+def _multi_restart_two_opt(dist, start_idx, stop_idxs, n_restart=8, max_iter=200,
+                           seed=12345, region_fn=None, lam=0.0):
+    """multi-restart 2-opt：多個隨機起點各跑 NN+2-opt，取成本最小者。
+    站數 <= 3 直接回傳。lam>0 時跨區段加權（region_lambda 平衡機制）。"""
     if len(stop_idxs) <= 3:
         return list(stop_idxs)
     import random
@@ -148,15 +169,13 @@ def _multi_restart_two_opt(dist, start_idx, stop_idxs, n_restart=8, max_iter=200
     best_dur = float("inf")
     for r in range(n_restart):
         if r == 0:
-            # 第一輪用 NN 起點（確定性、可重現）
-            cand = _nearest_neighbor(dist, start_idx, list(stop_idxs))
+            cand = _nearest_neighbor(dist, start_idx, list(stop_idxs), region_fn, lam)
         else:
-            # 其餘輪：隨機打亂初始順序再 2-opt
             shuffled = list(stop_idxs)
             rng.shuffle(shuffled)
-            cand = _nearest_neighbor(dist, start_idx, shuffled)
-        cand = _two_opt(dist, start_idx, cand, max_iter=max_iter)
-        dur = _route_duration_sec(dist, start_idx, cand)
+            cand = _nearest_neighbor(dist, start_idx, shuffled, region_fn, lam)
+        cand = _two_opt(dist, start_idx, cand, max_iter=max_iter, region_fn=region_fn, lam=lam)
+        dur = _route_cost_sec(dist, start_idx, cand, region_fn, lam)
         if dur + 1e-9 < best_dur:
             best_route, best_dur = cand, dur
     return best_route
@@ -248,10 +267,11 @@ def solve_grouped_regional(
     distance_source: str = "haversine",
     start_hour: float = 8.0,
     fuel_cost_per_km: float = 0.0,
+    region_lambda: float = 0.0,
 ) -> PlanResult:
-    """區域聚簇版：同區(里/區/鎮)站綁成一團，區間按真實距離 NN 排序拜訪，
-    區內仍用 _multi_restart_two_opt 排最短路徑（折衷：跨區不跳、區內最順）。
-    其餘產出結構與 solve_grouped 完全一致。"""
+    """區域平衡版：全站用 multi-restart 2-opt，但跨區段邊成本加權 region_lambda。
+    λ=0 → 純 2-opt（最短距離、可能跳區）；λ 大 → 強聚簇（不跳區、里程增）；
+    中間值 → 平衡點（不跳區且總里程不暴增）。產出結構與 solve_grouped 一致。"""
     result = PlanResult()
     result.distance_source = distance_source
     result.fuel_cost_per_km = fuel_cost_per_km
@@ -284,49 +304,12 @@ def solve_grouped_regional(
                     m_dur[i][j] = duration_matrix.get((v.id, i, j), 0.0)
         dist = _Dist(nodes, m_km, m_dur)
 
-        # --- 區域聚簇 ---
-        # 每站所屬區
-        region_of_idx = {}
-        for k in stop_idxs:
-            region_of_idx[k] = _region_of(nodes[k].address)
-        # 依出現順序分組（保證可重現）
-        regions_order = []
-        region_stops = {}
-        for k in stop_idxs:
-            r = region_of_idx[k]
-            if r not in region_stops:
-                region_stops[r] = []
-                regions_order.append(r)
-            region_stops[r].append(k)
-
-        # 區間拜訪順序：從起點開始，對「尚未拜訪的區」取「距離最短的該區重心」
-        # 重心 = 區內第一個站（近似即可，區間是粗粒度排序）
-        visited_regions = set()
-        region_seq = []
-        cur = start_idx
-        while len(visited_regions) < len(regions_order):
-            best_r, best_k, best_d = None, None, float("inf")
-            for r in regions_order:
-                if r in visited_regions:
-                    continue
-                # 用該區第一個站當代表點算距離
-                rep = region_stops[r][0]
-                d = dist.t(cur, rep)
-                if d < best_d:
-                    best_d, best_r, best_k = d, r, rep
-            region_seq.append(best_r)
-            visited_regions.add(best_r)
-            cur = best_k
-
-        # 區內各用 2-opt 排最順，再依區間順序拼接
-        ordered = []
-        for r in region_seq:
-            grp = region_stops[r]
-            if len(grp) == 1:
-                ordered.extend(grp)
-            else:
-                grp_sorted = _multi_restart_two_opt(dist, start_idx, grp)
-                ordered.extend(grp_sorted)
+        # --- 區域平衡：全站用 2-opt，但跨區段邊成本加權 region_lambda ---
+        # λ=0 → 純 2-opt（最短距離，可能跳區）
+        # λ 大 → 跨區移動被懲罰，趨向「同區跑完再下一區」
+        # 中間值 → 平衡點（不跳區且總里程不暴增）
+        ordered = _multi_restart_two_opt(
+            dist, start_idx, stop_idxs, region_fn=_region_of, lam=region_lambda)
 
         # 套用特殊需求約束
         ordered, violations = _constraint_sort(stops, ordered, start_hour, dist, start_idx)
@@ -363,7 +346,6 @@ def solve_grouped_regional(
             "load": load,
             "fuel_cost": fuel,
             "violations": violations,
-            "region_order": region_seq,   # 供報表顯示「跨區順序」
         })
 
     result.routes.sort(key=lambda r: r["vehicle"].id)

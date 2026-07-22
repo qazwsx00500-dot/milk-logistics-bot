@@ -266,16 +266,14 @@ def plan(start_hour, data_path, use_google, no_google, fuel_cost_per_km=0.0):
     except Exception:
         pass
 
+    # REGION_LAMBDA: 區域平衡係數。0=純2-opt(最短距離但跳區)，大值=硬聚簇(不跳區里程增)，
+    # 中間值(如 0.3~1.0)=平衡點。預設 0.5。
+    _lam = float(os.environ.get("REGION_LAMBDA", "0.8"))
     result = solve_grouped_regional(
         vehicles, stops_by_vehicle,
         matrix_km=matrix_km, duration_matrix=duration_matrix,
         distance_source=source, start_hour=start_hour,
-        fuel_cost_per_km=fuel_cost_per_km,
-    ) if os.environ.get("REGION_ORDER", "1") != "0" else solve_grouped(
-        vehicles, stops_by_vehicle,
-        matrix_km=matrix_km, duration_matrix=duration_matrix,
-        distance_source=source, start_hour=start_hour,
-        fuel_cost_per_km=fuel_cost_per_km,
+        fuel_cost_per_km=fuel_cost_per_km, region_lambda=_lam,
     )
     # 目標回倉標註：每台車預計回倉是否 <= 17:00
     for rt in result.routes:
@@ -452,11 +450,11 @@ def plan_auto_assign(start_hour, data_path, use_google, no_google, fuel_cost_per
                     gn_j = local_to_global[lj]
                     km_local[(veh_id, li, lj)] = matrix_km_full[(FULL, gn_i, gn_j)]
                     dur_local[(veh_id, li, lj)] = duration_matrix_full[(FULL, gn_i, gn_j)]
-        res = (solve_grouped_regional if os.environ.get("REGION_ORDER", "1") != "0"
-               else solve_grouped)([new_vehicles[gi - 1]], {veh_id: sub},
+        _lam = float(os.environ.get("REGION_LAMBDA", "0.8"))
+        res = solve_grouped_regional([new_vehicles[gi - 1]], {veh_id: sub},
                             matrix_km=km_local, duration_matrix=dur_local,
                             distance_source=source, start_hour=start_hour,
-                            fuel_cost_per_km=fuel_cost_per_km)
+                            fuel_cost_per_km=fuel_cost_per_km, region_lambda=_lam)
         rt = res.routes[0]
         rt["vehicle"] = new_vehicles[gi - 1]
         rt["return_hour"] = rt.get("end_hour", 0)
